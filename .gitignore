@@ -1,0 +1,30 @@
+# R session files
+.Rhistory
+.RData
+.Rproj.user/
+
+# RStudio project files (optional to ignore)
+*.Rproj
+
+# Large raw data / sequencing files
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.bam
+*.sam
+
+# Compressed archives
+*.tar
+*.tar.gz
+*.zip
+
+# Temporary / cache / log files
+*.tmp
+*.log
+*.out
+*.err
+
+# OS cruft
+.DS_Store
+Thumbs.db
