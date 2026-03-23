@@ -2,12 +2,12 @@
 
 ## Dataset
 
-This project analyzes the MAL1 and MAL2 Malaysian colorectal cancer (CRC) tissue cohorts profiled by 16S rRNA amplicon sequencing in:
+This project analyzes the MAL2 Malaysian colorectal cancer (CRC) tissue cohorts profiled by 16S rRNA amplicon sequencing in:
 
 Drewes JL et al. 2017. High-resolution bacterial 16S rRNA gene profile meta-analysis and biofilm status reveal common colorectal cancer consortia. *npj Biofilms and Microbiomes* 3:34.  
 Link: https://www.nature.com/articles/s41522-017-0040-3
 
-Data source: MAL1 and MAL2 cohort 16S rRNA amplicon data (species-level profiles) and associated clinical/biofilm metadata.
+Data source: MAL2 cohort 16S rRNA amplicon data (species-level profiles) and associated clinical/biofilm metadata.
 
 ## Scientific Question
 
