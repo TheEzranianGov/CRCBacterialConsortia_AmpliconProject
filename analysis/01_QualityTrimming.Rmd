@@ -1,0 +1,130 @@
+---
+title: "Quality Trimming with DADA2"
+author: "Mar Schmidt"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup-Rmd, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.align = "center",
+                      # Make sure to create the folder
+                      fig.path = "../figures/01_QualityTrimming")
+```
+
+
+# Set up the Environment 
+
+## Setting the Seed 
+
+```{r set-seed}
+set.seed(238428)
+```
+
+## Load Libraries 
+```{r}
+pacman::p_load(tidyverse, dada2, patchwork, 
+               Biostrings, ShortRead,
+               install = FALSE)
+```
+
+# Read in Raw Sequences 
+
+```{r read-raw-fastqs}
+# Set the path to the raw seq files 
+raw_fastqs_path <- "data/00_raw_gzipped_fastqs"
+raw_fastqs_path
+
+# What files are in this path? 
+head(list.files(raw_fastqs_path))
+# How many? 
+length(list.files(raw_fastqs_path))
+
+# Create vector of Forward reads 
+forward_reads <- list.files(raw_fastqs_path,
+                            pattern = "R1_001.fastq.gz",
+                            full.names = TRUE)
+# Intuition check 
+head(forward_reads)
+length(forward_reads)
+
+# Create vector of reverse reads 
+reverse_reads <- list.files(raw_fastqs_path, 
+                            pattern = "R2_001.fastq.gz", 
+                            full.names = TRUE)
+
+# Intuition Check 
+head(reverse_reads)
+length(reverse_reads)
+```
+
+
+# Assess the Raw Read Quality 
+
+```{r raw-read-quality}
+# Randomly select 12 samples to assess 
+random_samples <- sample(1:length(reverse_reads), size = 12)
+random_samples
+
+# Plot forward read quality 
+forward_rawQual_plot12 <-
+  plotQualityProfile(forward_reads[random_samples]) + 
+  labs(title = "Forward Reads: Raw Quality")
+
+# Plot reverse read quality 
+reverse_rawQual_plot12 <- 
+  plotQualityProfile(reverse_reads[random_samples]) +
+  labs(title = "Reverse Reads: Raw Quality")
+
+# Plot both plots together 
+forward_rawQual_plot12 + reverse_rawQual_plot12
+```
+
+## Prepare filtering and Trimming 
+
+```{r prep-filtTrim}
+# Create vector of sample names 
+sample_names <- sapply(strsplit(basename(forward_reads), "_"), `[`, 1) 
+
+# Create a test of the sample names 
+sample_names_R2 <- sapply(strsplit(basename(reverse_reads), "_"), `[`, 1) 
+
+# StopIfNot
+stopifnot(sample_names == sample_names_R2)
+
+# Test 
+head(sample_names)
+
+# Provide path for the filtered reads 
+filtered_fastqs_path <- "data/01_QualityTrimming/filtered_fastqs"
+filtered_fastqs_path
+
+# Create 2 vectors: filtered_forward_reads & filtered_reverse_reads 
+filtered_forward_reads <- 
+  file.path(filtered_fastqs_path, paste0(sample_names, "_R1_filtered.fastq.gz"))
+# intuition check
+length(filtered_forward_reads)
+
+# Reverse Reads 
+filtered_reverse_reads <- 
+  file.path(filtered_fastqs_path, paste0(sample_names, "_R2_filtered.fastq.gz"))
+# intuition Check
+length(filtered_reverse_reads)
+```
+
+
+# Filter and Trim Reads 
+
+```{r filter-trim}
+filtered_reads <- 
+  filterAndTrim(fwd = forward_reads, filt = filtered_forward_reads,
+                rev = reverse_reads, filt.rev = filtered_reverse_reads,
+                # Run filtering 
+                maxN = 0, maxEE = c(2, 2), truncQ = 2,
+                # Run trimming 
+                trimLeft = c(8, 3), truncLen = c(250, 248), 
+                rm.phix = TRUE, compress = TRUE,
+                multithread = 10)
+```
