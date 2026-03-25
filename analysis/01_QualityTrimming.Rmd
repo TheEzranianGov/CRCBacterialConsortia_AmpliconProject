@@ -1,6 +1,6 @@
 ---
 title: "Quality Trimming with DADA2"
-author: "Mar Schmidt"
+author: "Ezra Seckin"
 date: "`r Sys.Date()`"
 output: html_document
 editor_options: 
@@ -44,7 +44,7 @@ length(list.files(raw_fastqs_path))
 
 # Create vector of Forward reads 
 forward_reads <- list.files(raw_fastqs_path,
-                            pattern = "R1_001.fastq.gz",
+                            pattern = "_1.fastq.gz",
                             full.names = TRUE)
 # Intuition check 
 head(forward_reads)
@@ -52,7 +52,7 @@ length(forward_reads)
 
 # Create vector of reverse reads 
 reverse_reads <- list.files(raw_fastqs_path, 
-                            pattern = "R2_001.fastq.gz", 
+                            pattern = "_2.fastq.gz", 
                             full.names = TRUE)
 
 # Intuition Check 
@@ -124,7 +124,7 @@ filtered_reads <-
                 # Run filtering 
                 maxN = 0, maxEE = c(2, 2), truncQ = 2,
                 # Run trimming 
-                trimLeft = c(8, 3), truncLen = c(250, 248), 
+                trimLeft = c(5, 5), truncLen = c(245, 240), 
                 rm.phix = TRUE, compress = TRUE,
                 multithread = 10)
 ```
