@@ -19,6 +19,7 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/workdir/eas456/CRCBacterialConsortia_AmpliconProject")  # ← set to your actual project root
 knitr::opts_chunk$set(echo = TRUE,
                       fig.align = "center", 
                       # Send figures generated in this file to this folder below
@@ -62,7 +63,7 @@ Then, when we have a `multithread` parameter, we can set it to be `multithread =
 set.seed(238428)
 
 # Let's make a parameter to set the number of threads 
-n_threads = 50
+n_threads = 200
 ```
 
 ## Timing of this script
@@ -257,7 +258,6 @@ write.table(raw_ASV_table, file = "data/02_AssignASVs/raw_ASV_counts.tsv",
             sep = "\t", quote = FALSE, col.names = NA)
 ```
 
-##### THIS IS WHERE WE LEFT OFF 4/8/2026 !!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
 # Assess ASV Quality 
@@ -266,27 +266,44 @@ write.table(raw_ASV_table, file = "data/02_AssignASVs/raw_ASV_counts.tsv",
 
 First, let's inspect the distribution of the ASV sequence lengths across all of the ASVs that we have inferred. First, we need to consider: **What is the expected length of the ASVs?** 
 
-1. *What is the sequencing strategy?*
-    - paired-end 250bp (2x250bp) Illumina MiSeq Sequencing was used.
-    - Specifically, the V4 hypervariable region of the 16S rRNA gene was targeted for sequencing with the 515F and 806R primers. 
-2. *What's the total length of our starting amplicons?* 
-    - Our primers are named after the location they bind to on the 16S gene. So: 
-    - `806 - 515 = 291` 
-    - The total length of the starting amplicon is 291 base pairs, with primers.
-3. *What is the ASV length without primers?* 
-    - The 515F (`GTGYCAGCMGCCGCGGTAA`) primer is 19 base pairs. 
-    - The 806R (`GGACTACNVGGGTWTCTAAT`) primer is 20 base pairs. 
-    - `291 - 19 - 20 = 252` 
-    - The expected ASV length without primers is **252 base pairs**. 
-    - **IMPORTANT:** Remember, we did not sequence the primers in our current example, because the [Kozich et al., 2013](https://journals.asm.org/doi/10.1128/aem.01043-13) library prep was used. However, if the regular Illumina 2-step library preparation approach was used, the primers will be sequenced!
-4. *What is the length of the trimmed ASVs after `filterAndTrim()`?* 
-    - In our `01_QualityTrimming.Rmd`, we used `trimLeft = 8` to remove the bases at the beginning of the forward read and `truncLen = c(250, 248)`, which kept the full forward read length and removed 2 bases at the end of the reverse read. Therefore: 
-    - `252 - 8 = 244`
-5. *What is the overlap between our forward and reverse reads?*
-    - We performed 2x250 paired-end Illumina MiSeq Sequencing. However, from our multiQC report, we can see that our read length is actually 251 bp. 
-    - If we have a total read length of 251 base pairs and **we did not sequence our primers** (because we used the Kozich et al., 2013 AEM library preparation), then our overlap should be ~100%. 
-    
-<span style="color: red;">INTERPRETATION #1: What is the hypothesized ASV length for your project data set? Please insert a description here, similar to the statements above, of the expected ASV length. Please provide a clear explanation using the following, which an example is provided above: (1) sequencing strategy, (2) total length of starting amplicons, (3) the expected ASV length without the primers, (4) length expected after the filterAndTrim() step, and (5) the expected percent overlap.</span>
+INTERPRETATION #1: Hypothesized ASV Length
+
+What is the sequencing strategy?
+
+Paired-end 250 bp (2×250 bp) Illumina MiSeq sequencing was used, targeting the V4 hypervariable region of the 16S rRNA gene with the 515F and 806R primers.
+
+
+What's the total length of our starting amplicons?
+
+Our primers are named after the position they bind to on the 16S gene. So:
+806 - 515 = 291
+The total length of the starting amplicon is 291 base pairs, including primers.
+
+
+What is the expected ASV length without primers?
+
+The 515F primer (GTGYCAGCMGCCGCGGTAA) is 19 base pairs.
+The 806R primer (GGACTACNVGGGTWTCTAAT) is 20 base pairs.
+291 - 19 - 20 = 252
+The expected ASV length without primers is 252 base pairs.
+IMPORTANT: Unlike the in-class dataset (which used the Kozich et al., 2013 library prep and did not sequence the primers), our dataset used the standard Illumina 2-step PCR library preparation, meaning the primers were present in the raw sequences. They were subsequently identified and removed using Cutadapt in 01_QualityTrimming.Rmd, leaving us with reads of ~230 bp going into filterAndTrim().
+
+
+What is the expected ASV length after filterAndTrim()?
+
+After Cutadapt primer removal, our reads were ~230 bp long.
+In 01_QualityTrimming.Rmd, we used truncLen = c(228, 225) — trimming 2 bp from the forward read and 5 bp from the reverse read to remove low-quality tails.
+Since DADA2 merges forward and reverse reads into a single contiguous ASV, the final ASV length is determined by the amplicon itself (252 bp), not the individual read lengths — as long as there is sufficient overlap.
+The expected merged ASV length is therefore approximately 252 bp.
+
+
+What is the expected overlap between forward and reverse reads?
+
+Our forward reads are 228 bp and our reverse reads are 225 bp after filterAndTrim().
+Combined read length: 228 + 225 = 453 bp
+Expected amplicon length (without primers): 252 bp
+Expected overlap: 453 - 252 = 201 bp
+This is a very substantial overlap (~80% of the amplicon length), which is excellent. A minimum of 12–20 bp of overlap is required for DADA2 to merge reads successfully, so 201 bp of overlap gives us a very high confidence in accurate merging and ASV assignment.</span>
 
 ### ASV Length Stats 
 
@@ -355,9 +372,9 @@ Now that we are pretty convinced that we have some spurious ASVs, we will trim A
 *Let's trim the ASVs to only be the right size, which is 245!* 
 
 ```{r trim-ASVs}
-# Subset only ASVs that are 245 bps long 
+# Subset only ASVs that are between 400 and 430 bps long
 raw_ASV_table_trimmed <- 
-  raw_ASV_table[,nchar(colnames(raw_ASV_table)) == 245]
+  raw_ASV_table[, nchar(colnames(raw_ASV_table)) %in% 400:430]
 
 # Inspect the distribution of sequence lengths of all ASVs in dataset 
 table(nchar(getSequences(raw_ASV_table_trimmed)))
@@ -370,11 +387,11 @@ percRetained_Trimmed # Show it
 # AFTER TRIM
 plot_ASVLength_trimmed <- 
   data.frame(Seq_Length = nchar(getSequences(raw_ASV_table_trimmed))) %>%
-  ggplot(aes(x = Seq_Length )) + 
-  geom_histogram() + 
-  # include the x-axis scales
-  scale_x_continuous(limits = c(0, maxLength_ASV + 5)) + 
-  labs(y = "Number of ASVs", x = "Trimmed ASV Length (bps)")
+  ggplot(aes(x = Seq_Length)) + 
+  geom_histogram(binwidth = 1) +   # binwidth = 1 to show each bp individually
+  scale_x_continuous(limits = c(398, 432)) +  # ← zoomed in to your retained range
+  labs(y = "Number of ASVs", x = "Trimmed ASV Length (bps)") +
+  theme_bw()
 
 # Show the plot 
 plot_ASVLength_trimmed
@@ -703,12 +720,12 @@ final_ASV_table[1:5, 1:5]
 ```{r write-asv-tables}
 # 1. Write count table with ASV sequence names
 write.table(final_ASV_table_withSeqs, 
-            file = "data/Lecture/02_AssignASVs_Lecture/ASV_table_withSeqNames.tsv", 
+            file = "data/02_AssignASVs/ASV_table_withSeqNames.tsv", 
             sep = "\t", quote = FALSE, col.names = NA)
 
 # 2. Write count table with ASV numbered names (e.g. ASV_1, ASV_2, etc)
 write.table(final_ASV_table, 
-            file = "data/Lecture/02_AssignASVs_Lecture/ASV_table.tsv", 
+            file = "data/02_AssignASVs/ASV_table.tsv", 
             sep = "\t", quote = FALSE, col.names = NA)
 ```
 
@@ -733,7 +750,7 @@ head(ASV_fasta, n = 4)
 
 # Then, let's write it to a fasta file!
 # This will be our reference later on for which seq matches which ASV
-write(ASV_fasta, "data/Lecture/02_AssignASVs_Lecture/ASVs.fasta")
+write(ASV_fasta, "data/02_AssignASVs/ASVs.fasta")
 ```
 
 ## 3. Taxonomy Table 
@@ -798,7 +815,7 @@ Now, let's write out the taxonomy table
 ```{r write-tax-table}
 # Write the table 
 write.table(ASV_tax_table, 
-            file = "data/Lecture/02_AssignASVs_Lecture/ASV_taxonomy.tsv", 
+            file = "data/02_AssignASVs/ASV_taxonomy.tsv", 
             sep = "\t", quote = FALSE, col.names = NA)
 ```
 
@@ -809,7 +826,7 @@ Let's save the `track_counts_df`, which can be useful for downstream analyses.
 
 ```{r save-track reads}
 # And save the track_counts_df a R object, which we will merge with metadata information in the next step of the analysis in nalysis/02_Taxonomic_Assignment. 
-save(track_counts_df, file = "data/Lecture/02_AssignASVs_Lecture/track_read_counts.RData")
+save(track_counts_df, file = "data/02_AssignASVs/track_read_counts.RData")
 ```
 
 
@@ -818,18 +835,55 @@ save(track_counts_df, file = "data/Lecture/02_AssignASVs_Lecture/track_read_coun
 Before running the code below, be sure to copy over the file `/workdir/in_class_data/metadata_physeq.RData` to `Biodiversity_Salinity_16S/data`.
 
 ```{r make-metadata}
-# After copying the file over, read it into R
-load("data/metadata_physeq.RData")
+# ── 1. Load the SRA metadata ──────────────────────────────────────────────────
+metadata_df <- read.csv("data/SraRunTable.csv", header = TRUE)
 
-# The command above will load in a new object called: 
-metadata_physeq
+# Intuition check — what columns do we have?
+head(metadata_df)
+colnames(metadata_df)
 
-# Check it out
+# ── 2. Set the Run accession as row names so phyloseq can match samples ────────
+row.names(metadata_df) <- metadata_df$Run
+
+# Confirm Run accessions look correct
+head(rownames(metadata_df))  # Should look like SRR3666998, SRR3666999, etc.
+
+# ── 3. Diagnose any mismatches with the ASV table ─────────────────────────────
+missing_from_ASV <- rownames(metadata_df)[!rownames(metadata_df) %in% colnames(final_ASV_table)]
+missing_from_meta <- colnames(final_ASV_table)[!colnames(final_ASV_table) %in% rownames(metadata_df)]
+
+cat("In metadata but NOT in ASV table:", length(missing_from_ASV), "\n")
+print(missing_from_ASV)
+cat("\nIn ASV table but NOT in metadata:", length(missing_from_meta), "\n")
+print(missing_from_meta)
+cat("\nTotal metadata samples:", nrow(metadata_df), "\n")
+cat("Total ASV table samples:", ncol(final_ASV_table), "\n")
+cat("Number of matching samples:", sum(rownames(metadata_df) %in% colnames(final_ASV_table)), "\n")
+
+# ── 4. Subset BOTH objects to only shared samples ─────────────────────────────
+shared_samples <- intersect(rownames(metadata_df), colnames(final_ASV_table))
+
+cat("Number of shared samples:", length(shared_samples), "\n")
+
+# Subset metadata to shared samples only
+metadata_df <- metadata_df[shared_samples, ]
+
+# Subset ASV table to shared samples only
+final_ASV_table <- final_ASV_table[, shared_samples]
+
+# ── 5. Confirm the match is now perfect in both directions ────────────────────
+stopifnot(all(rownames(metadata_df) %in% colnames(final_ASV_table)))
+stopifnot(all(colnames(final_ASV_table) %in% rownames(metadata_df)))
+cat("✓ All metadata sample names match ASV table sample names\n")
+
+# ── 6. Convert to phyloseq sample_data object ─────────────────────────────────
+metadata_physeq <- sample_data(metadata_df)
+
+# Intuition checks
 sample_names(metadata_physeq)
-# how many samples? 
 length(sample_names(metadata_physeq))
+head(metadata_physeq)
 ```
-
 
 # Phyloseq S4 Object Creation 
 
@@ -848,7 +902,7 @@ raw_physeq <- phyloseq(otu_table(final_ASV_table, taxa_are_rows = TRUE),
 raw_physeq
 
 # Now, save the phyloseq object, but use the correct path to your folder:
-save(raw_physeq, file = "data/Lecture/02_AssignASVs_Lecture/raw_physeq.RData")
+save(raw_physeq, file = "data/02_AssignASVs/raw_physeq.RData")
 ```
 
 Now that we have saved our data files, we are good to go! 
