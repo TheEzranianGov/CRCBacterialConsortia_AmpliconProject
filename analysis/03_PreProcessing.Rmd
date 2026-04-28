@@ -19,6 +19,7 @@ editor_options:
 ---
 
 ```{r setup}
+knitr::opts_knit$set(root.dir = "/workdir/eas456/CRCBacterialConsortia_AmpliconProject")  # ← set to your actual project root
 knitr::opts_chunk$set(echo = TRUE,
                       fig.align = "center",
                       # send any figure output to this folder 
@@ -231,10 +232,12 @@ Reverse complements can show up in your dataset when identical sequences are rea
 So, here we will manually search for reverse complements in the dataset since we forgot to use the `orient.fwd` parameter in our `filterAndTrim()` step. And, it's always good to double check, even if we did! 
 
 
-```{r reverse-complements}
+````{r reverse-complements}
 # Pull out Taxa Table
+# NOTE: Using noChlorosMitos_physeq since this dataset has no negative controls
+# or mock community to remove, so we skip directly from chloro/mito removal
 tax_table <- 
-  noControlsChlorosMitos_physeq %>%
+  noChlorosMitos_physeq %>%
   tax_table() %>% 
   data.frame()
 
@@ -243,7 +246,7 @@ asv_names <- tax_table$ASV
 asv_seqs <- tax_table$ASVseqs
 
 # Create empty comparison matrix
-asv_rev_comp <- matrix(nrow=length(asv_seqs), ncol = length(asv_seqs)) 
+asv_rev_comp <- matrix(nrow = length(asv_seqs), ncol = length(asv_seqs)) 
 
 # Fix the names in the rows and columns 
 rownames(asv_rev_comp) <- asv_names
@@ -259,14 +262,14 @@ head(asv_dna)
 asv_rev_dna <- reverseComplement(asv_dna) 
 
 # Now loop through every asv sequence to check 
-for(i in 1:length(asv_seqs)){ # For each asv sequence...
-  match_vec <- asv_dna[i] == asv_rev_dna # Compare it to the reverse complement of every other sequence...
-  asv_rev_comp[,i] <- match_vec # Write that logical vector as a new column 
+for(i in 1:length(asv_seqs)){
+  match_vec <- asv_dna[i] == asv_rev_dna
+  asv_rev_comp[, i] <- match_vec
 }
 
-# Find how many TRUEs (matches) we have, divide by 2 because each pair occurs twice
-cat("For", sum(asv_rev_comp) / 2,"ASVs, the reverse complement will need to be removed") 
-```
+# Find how many TRUEs (matches), divide by 2 because each pair occurs twice
+cat("For", sum(asv_rev_comp) / 2, "ASVs, the reverse complement will need to be removed")
+````
 
 <span style="color: red;">INTERPRETATION #4: Do you have any reverse complements in your dataset? </span> 
 
@@ -311,19 +314,19 @@ Let's take a look!
 
 ```{r seq-depth, fig.height=3, fig.width=8}
 # The current data object
-noControlsMock_ChlorosMitos_physeq
+noChlorosMitos_physeq
 
 # Make a metadata_df for joining
 metadata_df <- 
-  noControlsMock_ChlorosMitos_physeq %>%
+  noChlorosMitos_physeq %>%
   sample_data() %>% 
-  data.frame()
+  data.frame() %>%
+  rownames_to_column(var = "names")
 
 # What is the library size/sequencing depth for each sample? 
 seqSums_df <- 
-  noControlsMock_ChlorosMitos_physeq %>%
+  noChlorosMitos_physeq %>%
   otu_table() %>%
-  # Sum each sample column 
   colSums() %>%
   data.frame() %>%
   rownames_to_column(var = "names") %>%
@@ -332,7 +335,7 @@ seqSums_df <-
 # Rename second column 
 colnames(seqSums_df)[2] <- "TotalSeqs"
 
-# check
+# Check
 dim(seqSums_df)
 head(seqSums_df)
 
@@ -342,31 +345,30 @@ seqSums_df %>%
   arrange(TotalSeqs) %>%
   head()
 
-# plot it as a bar plot 
+# Plot it as a bar plot — colored by a metadata column in YOUR dataset
+# First check what columns are available:
+colnames(seqSums_df)  # ← run this first to confirm the right column name to use below
+
 numSeq_bar_plot <- 
   seqSums_df %>%
-  ggplot(aes(x=reorder(names, TotalSeqs), y = TotalSeqs,
-             fill = station)) + 
+  ggplot(aes(x = reorder(names, TotalSeqs), y = TotalSeqs)) + 
   geom_bar(stat = "identity") + 
   theme(axis.text.x = element_blank()) + 
-  labs(y = "Read Depth", x = "Sample") + 
-  theme(legend.position = "none")
+  labs(y = "Read Depth", x = "Sample")
 
-# histogram
+# Histogram
 numSeq_hist_plot <- 
   seqSums_df %>%
-  ggplot(aes(x= TotalSeqs, fill = station)) + 
+  ggplot(aes(x = TotalSeqs)) + 
   geom_histogram(color = "black") + 
-  labs(y = "# of Samples", x = "Read Depth") + 
-  theme(legend.position = "bottom")
+  labs(y = "# of Samples", x = "Read Depth")
 
 # Density plot 
 numSeq_density_plot <- 
   seqSums_df %>%
-  ggplot(aes(TotalSeqs, fill = station)) +
+  ggplot(aes(TotalSeqs)) +
   geom_density(alpha = 0.5) + 
-  labs(x = "Read Depth") + 
-  theme(legend.position = "none")
+  labs(x = "Read Depth")
 
 # Put it all together 
 numSeq_bar_plot + numSeq_hist_plot + numSeq_density_plot + 
@@ -385,108 +387,85 @@ You can watch this video by [Dr. Pat Schloss](https://riffomonas.org/code_club/2
 
 ```{r rm-samps}
 # What's the min seq depth? 
-min(sample_sums(noControlsMock_ChlorosMitos_physeq))
+min(sample_sums(noChlorosMitos_physeq))
 
-# Remove 20210615-MA-SCB2F
-preprocessed_physeq <- 
-  noControlsMock_ChlorosMitos_physeq %>%
-  subset_samples(., names != "20210615-MA-SCB2F")
-
-#What's the new min seq depth?
-min(sample_sums(preprocessed_physeq))
-
-# Final check of the sequencing depth for now
-# Here, we could remove more samples if we needed to
+# Show full sequencing depth table to identify any samples to remove
 seqSums_df %>%
   dplyr::select(names, TotalSeqs) %>%
   arrange(TotalSeqs)
+
+# Remove any samples with obviously too few reads
+# ← Update the sample name below based on the arrange() output above
+# If no samples need to be removed, just assign directly:
+preprocessed_physeq <- noChlorosMitos_physeq
+
+# If you DO need to remove a sample, comment out the line above and use this instead:
+# preprocessed_physeq <- 
+#   noChlorosMitos_physeq %>%
+#   subset_samples(., names != "YOUR_LOW_DEPTH_SAMPLE_HERE")
+
+# What's the new min seq depth?
+min(sample_sums(preprocessed_physeq))
+
+# Final intuition check
+preprocessed_physeq
 ```
 
-# 7. Add some metadata
+# 7. Add Sequencing Depth to Metadata
 
-***Likely, you do not need to do this step as you already have the data in your metadata! If so, you can skip this step. That is because this step is unique to the in class dataset that we are working with and will be used for visualization purposes for statistical testing later.***
-
-Here, we will make a continuous value into a discrete value for plotting purposes later. We will add: 
-
-1. A discrete column called `salinity_group` that is made from the continuous data as indicated below. 
-2. The Sequencing Depth of each sample
-
-We will add the salinity group based on the follow values. We will also make sure the metadata is in the correct order for analyses later.
-
-
-| Salinity Group | Range (PSU) | Count |
-|----------------|-------------|--------|
-| Very Low       | 0–7         | 5      |
-| Low            | >7–13       | 5      |
-| Mid            | >13–20      | 11     |
-| High           | >20         | 8      |
-
+Since your metadata is already loaded from the SRA Run Table, you do not need to 
+create new categorical variables like `salinity_group` as those were specific to 
+the in-class dataset. However, we will add the sequencing depth to your existing 
+metadata so that information is not lost in downstream analyses.
 
 ```{r add-metadata}
-# Let's add a metadata column to the file for this dataset before moving on. 
-# We will create a discrete, categorical variable called "salinity_group" out of the continuous form of the data. 
-# 
+# Pull current metadata from the preprocessed phyloseq object
 metadata_df <- 
   preprocessed_physeq %>% 
   sample_data() %>%
   data.frame() %>%
-  mutate(depth_cat = ifelse(depth == 0.0, "surface", "bottom"),
-         # Create a new column for salinity group
-         salinity_group = factor(
-           cut(salinity_psu,
-               breaks = c(-Inf, 7, 13, 20, Inf),
-               labels = c("Very Low", "Low", "Mid", "High"),
-               right = TRUE),
-           # Make sure the factor order is correct
-           levels = c("Very Low", "Low", "Mid", "High"), ordered = TRUE),
-         # Fix the factor orders for date, station, and depth category 
-         date = factor(date, levels = c("6/2/21", "6/15/21", "10/5/21"), ordered = TRUE),
-         depth_cat = factor(depth_cat, levels = c("surface", "bottom"), ordered = TRUE),
-         station = factor(station, levels = c("Copano West", "Copano East","Mesquite Bay",
-                                              "Aransas Bay","Shipping Channel"), 
-                          ordered = TRUE))
+  rownames_to_column(var = "names")
 
-### Let's add the sequencing count data, so that doesn't get lost! 
-# What are the sample size distributions?
+# Add sequencing depth to the metadata
 num_seqs_df <- 
   preprocessed_physeq %>%
   sample_sums() %>%
   data.frame() %>%
   rownames_to_column(var = "names")
 
-# Fix the column names 
+# Fix the column name
 colnames(num_seqs_df)[2] <- "Sequencing_Depth"
 
-# Now merge it all 
+# Merge sequencing depth into metadata
 metadata_df2 <- 
   metadata_df %>%
   left_join(num_seqs_df, by = "names")
 
-## Check they match
+# Confirm rows match before reassigning
 stopifnot(metadata_df$names == metadata_df2$names)
 
-# Rename the rows 
+# Rename the rows to match sample names
 rownames(metadata_df2) <- metadata_df2$names
 
-# Reassign to the phyloseq object, rewriting the old metadata 
+# Reassign updated metadata back to the phyloseq object
 sample_data(preprocessed_physeq) <- metadata_df2
 
-# Double check
+# Confirm the new column is there
 colnames(data.frame(sample_data(preprocessed_physeq)))
 
-# Intuition check 
+# Intuition check
 head(num_seqs_df)
 ```
 
-# 8. Write out the data 
+# 8. Write out the data
 
-Finally, let's save our phyloseq object, which we will use for the next step! 
+Finally, let's save our phyloseq object, which we will use for the next step!
 
 ```{r save-physeq}
-# Please be sure to use the correct path to the appropriate directory in your file system
-save(preprocessed_physeq, file = "data/Lecture/03_PreProcessing_Lecture/preprocessed_phyloseq.RData")
+# Save the preprocessed phyloseq object
+save(preprocessed_physeq, 
+     file = "data/03_PreProcessing/preprocessed_phyloseq.RData")
 ```
-
 # Final info for Reproducibility 
 
 ## Check Render Time

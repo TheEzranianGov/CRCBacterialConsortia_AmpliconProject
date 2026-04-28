@@ -1,0 +1,747 @@
+---
+title: "Microbial Biodiversity in Colorectal Cancer vs. Normal Colon Tissue"
+author: "Ezra Seckin"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document: 
+    code_folding: show
+    theme: spacelab
+    highlight: pygments
+    keep_md: no
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+      toc_depth: 3
+  keep_md: true  
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/workdir/eas456/CRCBacterialConsortia_AmpliconProject")  # ← set to your actual project root
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.path = "../../figures/04_Biodiversity/",
+                      fig.align = "center")
+```
+
+# Goals 
+
+Run an analysis on the within-sample (alpha) biodiversity of colon microbiome samples from patients with colorectal cancer (CRC) and healthy normal controls.
+
+1. Calculate the Hill Numbers of the samples using the iNEXT package. 
+2. Plot and evaluate the interpolated and extrapolated rarefaction curves from iNEXT. 
+3. Analyze the Hill numbers as they relate to CRC status (Normal vs. CRC).
+4. Test and then answer the scientific question at hand! (Remember, we're doing biology!)
+
+## Inputs 
+
+1. We will need the `preprocessed_physeq` that we created in `analysis/03_PreProcessing.Rmd`, which has the chloroplasts, mitochondria, and any controls removed. 
+
+## Outputs 
+
+*This is an exciting analysis!!! We finally get to answer one of our scientific questions!*
+
+1. Calculated biodiversity measures (Hill numbers) across every sample. 
+2. Figures to include in our scientific paper that visualize the data as it relates to the scientific question.
+3. Statistical tests conveying the measured and quantified changes and patterns in biodiversity.
+
+# Scientific Question
+
+## Question & Hypotheses
+
+How does gut microbial biodiversity differ between patients with colorectal cancer (CRC) and healthy individuals with normal colon tissue?
+
+- *Null Hypothesis:* Microbial biodiversity does not differ between CRC and Normal colon tissue samples.
+- *Alternative Hypothesis:* Microbial biodiversity is reduced in CRC samples relative to Normal samples, consistent with the well-documented pattern of reduced gut microbial diversity in colorectal cancer.
+
+## Dataset Background
+
+To answer this scientific question, we are analyzing publicly available 16S rRNA amplicon sequencing data from the **MAL2 dataset** (BioProject: PRJNA325650), which profiles the gut microbiome of human colon tissue samples from individuals with colorectal cancer (CRC) and healthy normal controls. Samples were collected from colon tissue, sequenced on the Illumina MiSeq platform using paired-end 2×250 bp reads targeting the V3-V4 hypervariable region of the 16S rRNA gene.
+
+*Let's get to calculating Biodiversity!*
+
+# Set up the Environment 
+
+## Timing of this script
+
+```{r rmd-start}
+# What time did we start running this script? 
+start_time <- Sys.time()
+```
+
+## Set the seed 
+```{r set-seed}
+set.seed(238428)
+```
+
+## Load Packages & Colors 
+
+```{r load-packages-colors}
+# load packages
+pacman::p_load(tidyverse, devtools, patchwork, iNEXT, phyloseq,
+               # packages for stats
+               ggpubr, rstatix, install = FALSE)
+
+# Load in colors for plotting 
+source("colors_and_shapes.R")
+```
+
+## Load in Data 
+
+```{r load-data}
+load("data/03_PreProcessing/preprocessed_phyloseq.RData")
+
+# take a look at it! 
+preprocessed_physeq
+
+# Intuition check on seq depth
+min(sample_sums(preprocessed_physeq))
+
+# Make a metadata dataframe 
+metadata_df <- 
+  preprocessed_physeq %>%
+  sample_data() %>%
+  data.frame()
+
+# view of it
+glimpse(metadata_df)
+```
+
+# Biodiversity Hill Numbers with iNEXT
+
+
+## Hill Number Equation
+
+Next, we will calculate the biodiversity with the [iNEXT package](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12613) package. iNEXT focuses on three measures of biodiversity via the Hill numbers. Hill numbers have the order q: 
+
+$$
+{}^qD = \left( \sum_{i=1}^{S} p_i^q \right)^{1/(1 - q)}, \quad q \geq 0, \quad q \neq 1.
+$$
+
+But when *q = 1*, then the equation is: 
+
+$$
+{}^1D = \lim_{q \to 1} {}^qD = \exp\left( - \sum_{i=1}^{S} p_i \log p_i \right) = \exp(H_{sh}).
+$$
+
+
+**Where:**
+
+- \( {}^qD \) is the *Hill number* or *diversity of order \( q \)*, a measure of species diversity.
+- \( q \) is the *order of diversity*, which determines how sensitive the measure is to species relative abundances:
+  - \( q = 0 \): all species are weighted equally or **species richness**,
+  - \( q = 1 \): corresponds to the exponential of **Shannon entropy**,
+  - \( q = 2 \): corresponds to the **inverse of Simpson's index**.
+- \( S \) is the *total number of species* in the community.
+- \( p_i \) is the *relative abundance* of species \( i \), i.e., the proportion of individuals in the community belonging to species \( i \).
+
+## Microbial Example 🦠
+
+Imagine you're studying the microbial diversity in three sourdough starters from three different bakers: A, B, and C. Each one contains a mix of **ASVs**. *But how diverse are they, really?* Here's a great application of the **Hill numbers** to find out, varying the value of \( q \).
+
+### When \( q = 0 \): Counting *All* ASVs Equally  
+> *Species Richness* → \( {}^0D \)
+
+Here, we ignore how common or rare each ASV is. Every ASV counts equally — even ones that appear just once. For example, this is like walking into a library and simply counting how many unique book titles are on the shelves—not how many copies of each exist, just the number of different titles. So, even if there's only one copy of most books and 100 copies of one, they all count the same. 
+
+Here, in the context of microbial communities, we are pondering: **"How many different ASVs are present?"** We do not weight them by abundance/evenness in any way. Rather, we focus on a binary measure of 0s and 1s that represent presence (1) and absence (0).
+
+- Baker A's starter has 10 unique ASVs: \( {}^0D_{\text{A}} = 10 \)    
+- Baker B's has 7 unique ASVs: \( {}^0D_{\text{B}} = 7 \)  
+- Baker C's has 15 unique ASVs: \( {}^0D_{\text{C}} = 15 \)  
+
+
+### When \( q = 1 \): Balancing Rarity and Commonness  
+> *Shannon Diversity* → \( {}^1D \)
+
+Now we ask: **"How evenly are the ASVs distributed?"** Rare ASVs matter, but not as much as common ones. If we revisit the library analogy, now imagine you're randomly picking books off the shelves to read. Some books have many more copies, so you're more likely to pick those — but you still have a chance to encounter the rare ones. This measure reflects both richness and evenness — it tells you the effective number of "common" book titles based on their relative frequency. `q = 1` gives you a sense of how diverse your reading experience would be, considering popular vs. rare titles.
+
+- Baker A's 10 ASVs are 90% dominated by just one ASV: \( {}^1D_{\text{A}} \approx 2 \)  
+- Baker B's 7 ASVs are fairly even: \( {}^1D_{\text{B}} \approx 6.8 \)  
+- Baker C's 15 ASVs include 3 very dominant ones: \( {}^1D_{\text{C}} \approx 5 \)  
+
+Even though Baker C and A have more ASVs in terms of richness in \( {}^0D \), **Baker B** has the highest \( {}^1D \) due to better balance between the abundances of its seven ASVs. 
+
+### When \( q = 2 \): Focus on the Most Abundant ASVs  
+> *Simpson-like Diversity* → \( {}^2D \)
+
+Now we modify our question to wonder: **How many ASVs dominate each sample?** Here, rare ASVs hardly matter. For example, this is like walking into the library and only noticing the most abundant book titles, because they take up entire shelves. The rare titles are barely visible. Therefore, this measure emphasizes dominant species—those with many copies. `q = 2` tells us the effective number of dominant book titles, downplaying the presence of rare ones.
+
+- Baker A's starter is almost all one ASV of 10 total ASVs: \( {}^2D_{\text{A}} \approx 1.2 \)  
+- Baker B's 7 ASVs are balanced: \( {}^2D_{\text{B}} \approx 6.5 \)   
+- Baker C's has 3 dominant ASVs out of 15: \( {}^2D_{\text{C}} \approx 3.5 \)  
+
+This tells us: **Baker B** has the most diverse community in terms of its *dominant* community members.
+
+
+---
+
+## Hill Number Summary Table
+
+| Value of \( q \) | Emphasis                    | Hill Number \( {}^qD \) | Interpretation                              |
+|------------------|-----------------------------|-------------------------|----------------------------------------------|
+| \( q = 0 \)      | Every ASV counts equally     | \( {}^0D \)             | ASV richness — a simple count                |
+| \( q = 1 \)      | Balance of common & rare     | \( {}^1D \)             | Shannon Diversity — balanced view            |
+| \( q = 2 \)      | Dominant ASVs matter most    | \( {}^2D \)             | Simpson Diversity — focus on major players   |
+
+---
+
+So, hopefully you can see that using Hill numbers like \( {}^qD \) gives you a powerful, flexible way to describe microbial diversity — from just counting ASVs to understanding community structure. Next, we will calculate the biodiversity with the [iNEXT package](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12613) package. iNEXT focuses on three measures of biodiversity via the Hill numbers. For each Hill Number, [iNEXT](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12613) uses the observed abundance of species within a sample to compute diversity estimates and the associated 95% confidence intervals for the following two types of rarefaction and extrapolation (R/E):
+
+1. **Sample-size-based (or size-based) R/E curves**: iNEXT computes diversity estimates for rarefied and extrapolated samples up to an appropriate size (2x the total number of individuals/sequences in that sample). This type of sampling curve plots the diversity estimates with respect to sample size.
+2. **Coverage‐based R/E curves:** iNEXT computes diversity estimates for rarefied and extrapolated samples based on a standardized level of sample completeness (as measured by sample coverage) up to an appropriate coverage value. This type of sampling curve plots the diversity estimates with respect to sample coverage. **NOTE: Coverage is inapplicable to DADA2 datasets, as they lack singletons** (this is also why we can't use Amy Willis's breakaway approach). 
+
+*An important note:* We'll be using the size_based output. Our lab has previously been suspicious of the Asymptotic Estimator. Therefore we will use the size_based approach here, with the caveat that we will very rigorously confirm that we've approached saturation for all of our samples! 
+
+
+> Warning! iNEXT takes a while to run, especially if your samples are deeply sequenced or if you have many samples! It is wise to calculate iNEXT early and then come back to the rest of the analysis later on.
+
+```{r iNEXT-biodiversity}
+# prepare the input data 
+# Species in rows and the samples in columns 
+iNEXT_input_df <- 
+  preprocessed_physeq %>%
+  otu_table() %>%
+  data.frame()
+
+# Inspect 
+dim(iNEXT_input_df)
+iNEXT_input_df[1:5, 1:5]
+
+# Run iNEXT 
+# Remember to set the seed!
+# ASVs in ROWs, samples in COLUMNS 
+iNEXT_data <- iNEXT(iNEXT_input_df, 
+                    q = c(0, 1, 2),
+                     datatype = "abundance")
+
+# Save the object for later! 
+# Make the directory first in shell! Otherwise there will be an error
+save(iNEXT_data, file = "data/04_Biodiversity/iNEXT_data.RData")
+```
+
+Since iNEXT takes a while to run, we load in the pre-calculated data object for all downstream analyses. 
+
+```{r load-iNEXT-data}
+load("data/04_Biodiversity/iNEXT_data.RData")
+
+# Inspect 
+str(iNEXT_data)
+typeof(iNEXT_data)
+```
+
+
+# Rarefaction Curves 
+
+## `ggiNEXT` Rarefaction Curves 
+
+```{r iNEXT-colors}
+# Prepare Colors 
+color_df <- 
+  iNEXT_input_df %>%
+  colnames() %>%
+  data.frame()
+
+# Rename the column 
+colnames(color_df)[1] <- "names"
+
+# Check
+head(color_df)
+
+# Make a helper dataframe for plotting with colors 
+iNEXT_color_df <- 
+  color_df %>%
+  # Fix the names for merging
+  mutate(names = gsub(names, pattern = "[.]", replace = "-"),
+         names = gsub(names, pattern = "X",  replace = "")) %>%
+  # Merge with metadata
+  left_join(metadata_df, by = "names") %>%
+  # Merge with colors for plotting with ggiNEXT
+  left_join(
+    data.frame(crc_colors = crc_colors,
+               ethnicity  = names(crc_colors)),
+            by = "ethnicity")
+
+head(iNEXT_color_df)
+```
+
+```{r plot-iNEXT-rarefaction, fig.width=6, fig.height=3.5}
+ggiNEXT(iNEXT_data, type = 1, facet.var = "Order.q") + 
+  scale_color_manual(values = iNEXT_color_df$crc_colors) + 
+  scale_fill_manual(values = iNEXT_color_df$crc_colors) + 
+  theme_bw() + 
+  theme(legend.position = "none") + 
+  labs(y = "Effective Number of ASVs", x = "Number of Sequences") 
+```
+
+Remembering that an Order q of:  
+
+  - 0 = Richness / Number of Total taxa
+  - 1 = Exponential Shannon / Number of "Common" taxa
+  - 2 = Inverse Simpson / Number of "Dominant" taxa 
+  
+*Also note that iNEXT will extrapolate the number of sequences to double the sequencing depth of the sample!* This extrapolation is represented by the dotted line, which extends to 2x the library size of the sample. 
+
+Some general observations from this plot:
+
+1. The best gift of the Hill Numbers: *All three diversity measures are on the same x-axis: The Effective Number of Species or ASVs.*  
+2. As q increases from 0 to 1 to 2, the abundance of the species is weighted more, so the rarefaction curve plateaus earlier. This is important because it **indicates that richness is the most sensitive to sequencing depth!** Shannon is less sensitive, and Simpson is the least sensitive of the three.
+3. Most of the sample rarefaction curves appear to plateau — we will confirm this more rigorously in the manual rarefaction plots below.
+
+Let's manually plot the data pulled from the iNEXT output to explore individual samples more clearly.
+
+## Manual Rarefaction Curves 
+
+```{r manual-rarefaction, fig.width=6, fig.height=5}
+iNEXT_manual_df <- 
+  iNEXT_data$iNextEst$size_based %>%
+  dplyr::rename(names = Assemblage) %>%
+  # Fix the sample names for merging with metadata 
+  mutate(names = gsub(names, pattern = "[.]", replace = "-"),
+         names = gsub(names, pattern = "X", replace = "")) %>%
+  # Join with the metadata
+  left_join(., metadata_df, by = "names") 
+
+# Inspection
+dim(iNEXT_manual_df)
+colnames(iNEXT_manual_df)  # confirm ethnicity column is present after join
+
+# Manually plot rarefaction curves 
+iNEXT_manual_df %>%
+  # Filter to only observed/rarefied sequences (no extrapolation)
+  dplyr::filter(Method == "Rarefaction") %>%
+  ggplot(aes(x = m, y = qD, color = ethnicity, group = names)) + 
+  geom_line() + 
+  # Facet by Order.q and CRC status
+  facet_grid(Order.q~ethnicity, scales = "free") + 
+  scale_color_manual(values = crc_colors) + 
+  theme_bw() + 
+  labs(y = "Effective Number of ASVs", x = "Number of Sequences") + 
+  theme(legend.position = "bottom")
+```
+
+<span style="color: red;">INTERPRETATION #1:  What can you conclude from the ggiNEXT and manual rarefaction curve plots? Are there "enough" sequences to analyze the samples? Is it valid to make any conclusions about species richness when q = 0? What about when q = 1? Or q = 2? Why or why not?
+
+The aggregated ggiNEXT plot and the manual rarefaction curves both confirm that sequencing depth is adequate across all 41 samples. In the manual rarefaction plot, all individual sample curves — in both the CRC and Normal groups — plateau clearly before reaching their maximum sequencing depth for all three Hill numbers (q = 0, 1, 2). This plateau behavior is essential: it confirms that we have sequenced deeply enough to capture the true diversity of each sample, and that it is valid to make statistical conclusions about richness (q = 0), Shannon diversity (q = 1), and Simpson diversity (q = 2) in this dataset. As expected, curves plateau progressively faster as q increases from 0 to 2, since higher-order Hill numbers are less sensitive to rare species that require deeper sequencing to detect.
+The manual rarefaction curves also provide an early qualitative signal worth investigating statistically. Several CRC samples appear to reach notably lower plateau values — particularly at q = 0 — compared to Normal samples, suggesting that some CRC-associated communities may harbor reduced richness. However, there is also considerable spread within both groups, and these observations are purely qualitative at this stage. We will rigorously test whether these apparent differences are statistically significant in the sections below.    </span>
+
+While the `ggiNEXT` plot aggregates all samples together, the manual rarefaction curves allow us to examine individual samples within each CRC status group (Normal vs. CRC). Key things to assess here are whether rarefaction curves plateau for each Hill number in each group — plateau behavior indicates that sequencing was deep enough to capture the community diversity at that level of q. If curves do not plateau at q = 0, richness estimates are unreliable and we should be cautious about making diversity comparisons.
+
+However, all of these observations are qualitative... let's actually quantify by running some stats!
+
+# Statistical Testing 
+
+So, how do we actually quantify the changes in biodiversity that we may observe between the CRC and Normal groups? That takes us into statistics! 
+
+
+## Parametric vs. Non-Parametric Statistics
+
+Understanding the difference between **parametric** and **non-parametric** statistics is essential for choosing the right test for your data, especially in microbial ecology where data often violate assumptions of normality.
+
+*So, what's the difference between the two?*
+
+| Feature                     | Parametric                                | Non-Parametric                          |
+|----------------------------|--------------------------------------------|-----------------------------------------|
+| **Assumptions**            | Assumes a known distribution (usually normal) | Fewer assumptions about distribution    |
+| **Data Type**              | Continuous (interval/ratio)                | Ordinal or non-normal continuous        |
+| **Examples**               | t-test, ANOVA, linear regression           | Wilcoxon, Kruskal-Wallis, Spearman      |
+| **Estimates Based On**     | Parameters like mean and variance          | Ranks or medians                        |
+| **Sensitive to Outliers?**| Yes                                        | Less sensitive                          |
+| **Statistical Power**      | Higher if assumptions are met              | Lower but more robust to violations     |
+
+### Parametric Statistics
+
+Parametric tests assume that the data follow a specific distribution (usually a normal/Gaussian distribution). They are more statistically powerful **if those assumptions are met**. Some examples include comparing means with a t-test or ANOVA, or modeling relationships using linear regression. 
+
+```
+# Example t-test on alpha diversity between two treatment groups (Shannon index)
+t.test(shannon ~ treatment, data = my_data)
+```
+
+### Non-Parametric Statistics
+
+Non-parametric tests do not assume a specific data distribution and are more robust to outliers. However, they sacrifice some statistical power in exchange for this flexibility. Some examples include Wilcoxon tests to compare diversity between sample types. Non-parametric tests are ideal when:
+
+- Data are skewed or non-normal
+- Sample sizes are small
+- Outliers are present
+- You're analyzing ranks (*e.g.,* ordinal data) or medians
+
+```
+# Example Wilcoxon test on alpha diversity between two treatment groups (Shannon index)
+wilcox.test(shannon ~ treatment, data = my_data)
+```
+
+## How do I test if my data is "normal"? 
+
+Typically people perform a **Shapiro-Wilk Test** on their data. The Shapiro-Wilk test is a statistical test used to check whether a sample of data comes from a normally distributed population.
+
+The Shapiro-Wilk test calculates a **W statistic** by comparing the order statistics (sorted values) of your data with those expected from a normal distribution.
+
+- **W ≈ 1** → data is close to normal.
+- **W < 1** → increasing deviation from normality.
+
+What hypotheses does the Shapiro-Wilk Test evaluate?
+
+- *Null hypothesis (H₀):* The data are normally distributed.
+    - *p-value > 0.05*: Fail to reject H₀ — the data appears normal.
+- *Alternative hypothesis (H₁):* The data are *not* normally distributed.
+    - *p-value < 0.05*: We can reject H₀ — the data is **not normal**.
+
+
+**How to run the Shapiro-Wilk test?**
+
+*Run Shapiro-Wilk for each Hill number (q = 0, 1, 2)*
+
+```{r shapiro-wilk-ethnicity}
+# ── Build obs_div_df from iNEXT output ────────────────────────────────────────
+obs_div_df <- 
+  iNEXT_data$iNextEst$size_based %>%
+  dplyr::rename(names = Assemblage) %>%
+  mutate(names = gsub(names, pattern = "[.]", replace = "-"),
+         names = gsub(names, pattern = "X", replace = "")) %>%
+  left_join(., metadata_df, by = "names") %>%
+  dplyr::filter(Method == "Observed")
+
+# Intuition check
+dim(obs_div_df)
+head(obs_div_df)
+
+# ── Test normality of qD for each Hill number ─────────────────────────────────
+obs_div_df %>%
+  group_by(Order.q) %>%
+  summarise(
+    shapiro_W = shapiro.test(qD)$statistic,
+    shapiro_p = shapiro.test(qD)$p.value,
+    normal    = shapiro_p > 0.05
+  )
+```
+
+The table above reports the Shapiro-Wilk W statistic and p-value for each Hill number. If p < 0.05, we reject the null hypothesis of normality and should use **non-parametric** tests (Wilcoxon). If p > 0.05, the data is consistent with normality and we can use **parametric** tests (t-test).
+
+*Is the richness data specifically normal?*
+
+```{r shapiro-wilk-richness}
+### Now what about for richness specifically?
+
+# check it
+glimpse(obs_div_df)
+
+# Pull out richness (Order.q == 0) for all samples
+obs_whole_rich_df <- 
+  obs_div_df %>%
+  dplyr::filter(Order.q == 0)
+
+# Intuition check
+dim(obs_whole_rich_df)
+head(obs_whole_rich_df)
+
+# Test if richness data is normally distributed
+shapiro.test(obs_whole_rich_df$qD)
+```
+
+The Shapiro-Wilk result for richness (q = 0) informs whether we use a Wilcoxon test or a t-test when comparing richness between Normal and CRC groups below.
+
+## Statistics in Microbial Ecology
+
+Generally speaking, we tend to use non-parametric tests in microbial ecology because microbiome data is often skewed, zero-inflated, or compositional. However, if a Shapiro-Wilk test confirms normality, parametric tests are valid and more powerful.
+
+| **Research Question**                        | **Parametric Test**       | **Non-Parametric Test**       |
+|---------------------------------------------|----------------------------|-------------------------------|
+| Compare alpha diversity (2 groups)          | t-test                     | Wilcoxon rank-sum test        |
+| Compare alpha diversity (more than 2 groups)| ANOVA                      | Kruskal-Wallis test           |
+| Correlate diversity with environmental data | Pearson correlation        | Spearman correlation          |
+| Test differences in beta diversity          | *Not applicable* (uses distance matrices) | PERMANOVA (non-parametric)  |
+| Model transformed taxon abundances          | Linear regression, GLM     | Rank-based regression         |
+
+**Takeaways about statistics**
+
+- **Parametric statistics** use data values directly (means, variances) and are more powerful when assumptions (*e.g.,* normality, homoscedasticity) are met.
+- **Non-parametric statistics** use ranks and are more powerful when there are violations of assumptions made in parametric statistics, making them a safer choice for skewed, sparse, or ordinal data — which is commonplace in microbial ecology. 
+- In microbial ecology, non-parametric methods are commonly used due to the nature of microbiome data (*e.g.,* zero-inflated, non-normal, compositional), but **parametric tests are absolutely valid** when assumptions are met or appropriate transformations are applied.
+
+Choose your statistical approach based on the:
+
+- Type and distribution of your data
+- Question you're asking
+- Assumptions your data can reasonably meet
+
+
+# Categorical Analysis: Normal vs. CRC
+
+Here, our scientific question relates to a **categorical grouping variable** (`ethnicity`: Normal vs. CRC) and a **continuous outcome variable** (the Hill number diversity measure, `qD`). Since we have exactly two groups, we will use either a **Wilcoxon rank-sum test** (non-parametric) or a **t-test** (parametric), depending on the results of the Shapiro-Wilk normality test above.
+
+### Richness by CRC Status
+
+```{r ethnicity-richness, fig.height=4, fig.width=4}
+# ── Statistical test: Wilcoxon (two groups: Normal vs CRC) ────────────────────
+wilcox_ethnicity_rich <- 
+  obs_whole_rich_df %>%
+  wilcox_test(qD ~ ethnicity) %>%
+  add_xy_position(x = "ethnicity")
+
+# Look at it
+wilcox_ethnicity_rich
+
+# ── Box plot of richness by CRC status ────────────────────────────────────────
+richness_ggboxplot <- 
+  ggboxplot(obs_whole_rich_df, x = "ethnicity", y = "qD",
+            color = "ethnicity", fill = "ethnicity", alpha = 0.3,
+            outlier.shape = NA) +
+  # Add jittered points
+  geom_jitter(aes(color = ethnicity)) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(y = "# of ASVs (Richness, q = 0)") +
+  # Add Wilcoxon p-value
+  stat_pvalue_manual(wilcox_ethnicity_rich, hide.ns = TRUE,
+                     tip.length = 0, step.increase = 0.01) +
+  labs(subtitle = get_test_label(wilcox_ethnicity_rich, detailed = TRUE),
+       caption = get_pwc_label(wilcox_ethnicity_rich)) +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 30,
+                                   hjust = 1,
+                                   vjust = 1))
+
+# Show the plot
+richness_ggboxplot
+```
+
+Great, this matches what we had defined during the pre-processing steps! 
+
+### Diversity by CRC Status (All Hill Numbers)
+
+```{r plot-div-ethnicity-noStats}
+# Plot boxplots by CRC status against diversity across all Hill numbers
+obs_div_df %>%
+  dplyr::filter(Method == "Observed") %>%
+  ggplot(aes(x = ethnicity, y = qD, fill = ethnicity, 
+             color = ethnicity)) + 
+  facet_wrap(.~Order.q, scales = "free_y") + 
+  geom_jitter() + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  labs(y = "Effective Number of ASVs") + 
+  theme_bw() + 
+  theme(legend.position = "bottom",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 30,
+                                   hjust = 1, 
+                                   vjust = 1))
+```
+
+
+### Simpson Diversity by CRC Status
+
+```{r ethnicity-vs-simpson, fig.height=4, fig.width=4}
+# Pull out Simpson data
+obs_simps_df <- 
+  obs_div_df %>%
+  dplyr::filter(Order.q == 2)
+
+# Wilcoxon test for Simpson diversity between Normal and CRC
+wilcox_ethnicity_simps <- 
+  obs_simps_df %>%
+  wilcox_test(qD ~ ethnicity) %>%
+  add_xy_position(x = "ethnicity")
+
+# Look at it
+wilcox_ethnicity_simps
+
+# Simpson by CRC status
+simps_ggboxplot <- 
+  ggboxplot(obs_simps_df, x = "ethnicity", y = "qD",
+            color = "ethnicity", fill = "ethnicity", alpha = 0.3,
+            outlier.shape = NA) +
+  # Add points
+  geom_jitter(aes(color = ethnicity)) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(y = "# of Dominant ASVs (Simpson)") +
+  # Add Wilcoxon p-value
+  stat_pvalue_manual(wilcox_ethnicity_simps, hide.ns = TRUE,
+                     tip.length = 0, step.increase = 0.01) +
+  labs(subtitle = get_test_label(wilcox_ethnicity_simps, detailed = TRUE),
+       caption = get_pwc_label(wilcox_ethnicity_simps)) +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 30,
+                                   hjust = 1,
+                                   vjust = 1))
+
+# Show the plot
+simps_ggboxplot
+```
+
+```{r plot-rich-simps, fig.width=8, fig.height=4}
+# Show richness and Simpson plots side by side
+rich_ggboxplot + simps_ggboxplot
+```
+
+```{r ethnicity-vs-shannon, fig.height=4, fig.width=4}
+# Pull out Shannon data
+obs_shannon_df <- 
+  obs_div_df %>%
+  dplyr::filter(Order.q == 1)
+
+# Wilcoxon test for Shannon diversity between Normal and CRC
+wilcox_ethnicity_shannon <- 
+  obs_shannon_df %>%
+  wilcox_test(qD ~ ethnicity) %>%
+  add_xy_position(x = "ethnicity")
+
+wilcox_ethnicity_shannon
+
+# Shannon by CRC status
+shannon_ggboxplot <- 
+  ggboxplot(obs_shannon_df, x = "ethnicity", y = "qD",
+            color = "ethnicity", fill = "ethnicity", alpha = 0.3,
+            outlier.shape = NA) +
+  geom_jitter(aes(color = ethnicity)) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(y = "# of Common ASVs (Shannon)") +
+  stat_pvalue_manual(wilcox_ethnicity_shannon, hide.ns = TRUE,
+                     tip.length = 0, step.increase = 0.01) +
+  labs(subtitle = get_test_label(wilcox_ethnicity_shannon, detailed = TRUE),
+       caption = get_pwc_label(wilcox_ethnicity_shannon)) +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 30,
+                                   hjust = 1,
+                                   vjust = 1))
+
+shannon_ggboxplot
+```
+
+```{r plot-rich-shannon-simps, fig.width=12, fig.height=4}
+# Show all three Hill number comparisons side by side
+rich_ggboxplot + shannon_ggboxplot + simps_ggboxplot
+```
+
+
+<span style="color: red;">INTERPRETATION #2:  If you have categorical data, what can you conclude regarding the role that all ASVs (richness, q = 0) versus common ASVs (Shannon, q = 1) versus dominant ASVs (Simpson, q = 2) have on the biodiversity of your samples as it relates to CRC status?
+
+Across all three Hill number diversity metrics, there were no statistically significant differences in alpha diversity between Normal and CRC colon tissue samples. Richness (q = 0, W = 155.5, p = 0.17), Shannon diversity (q = 1, W = 190, p = 0.63), and Simpson diversity (q = 2, W = 212, p = 0.95) were all non-significant, indicating that we fail to reject the null hypothesis that microbial biodiversity does not differ between CRC and Normal samples. Visually, the boxplots do suggest that Normal samples tend to have a higher median richness (~500 ASVs) compared to CRC samples (~325 ASVs), and greater spread in richness values — however, this trend did not reach statistical significance, likely due to the high within-group variability and the relatively small sample size (n = 41). Notably, the direction of the richness trend is consistent with the well-documented pattern of reduced gut microbial diversity in CRC, but the effect is not strong enough to be detected at this sample size.</span>
+
+<span style="color: red;">INTERPRETATION #3:  How did you statistically test your scientific question in Interpretation #2? Why did you choose this test?
+
+Alpha diversity was compared between Normal and CRC groups using the Wilcoxon rank-sum test (also known as the Mann-Whitney U test), a non-parametric test appropriate for comparing two independent groups. The Wilcoxon test was chosen over a parametric t-test because the Shapiro-Wilk normality test indicated that the diversity values did not meet the assumption of normality for all Hill numbers — a common finding in microbiome datasets, which are frequently skewed or zero-inflated. The Wilcoxon test makes no distributional assumptions and instead compares the ranks of the two groups, making it the more appropriate and conservative choice here. Separate tests were run for each Hill number (q = 0, 1, 2) since each metric captures a different aspect of community diversity — richness, evenness-weighted diversity, and dominance-weighted diversity — and each represents an independent biological question about how CRC status shapes gut community structure.</span>
+
+
+# Continuous Relationships 
+
+Here, we explore whether sequencing depth — the only continuous variable available in this dataset — is associated with biodiversity measures across Normal and CRC samples. This is an important quality control check: if sequencing depth strongly predicts diversity, it suggests that observed differences between groups may be confounded by uneven library sizes rather than reflecting true biological signal.
+
+## Spearman vs. Linear Model: What's the Difference?
+
+| Feature                  | **Spearman Correlation**                           | **Linear Model (`lm()`)**                               |
+|--------------------------|----------------------------------------------------|----------------------------------------------------------|
+| **Type of Relationship** | Monotonic (increasing or decreasing)              | Linear (straight-line relationship)                      |
+| **Assumptions**          | Non-parametric (no distribution assumptions)      | Parametric (normality, linearity, homoscedasticity)      |
+| **Input Data**           | Ordinal, ranked, or continuous                    | Continuous (can include categorical predictors too)      |
+| **What it Measures**     | Strength and direction of monotonic relationship  | Effect size, direction, significance of predictors        |
+| **Output**               | Correlation coefficient (ρ) and p-value           | Intercept, slope(s), p-values, R², residuals, etc.       |
+| **Resistant to Outliers?** | More robust                                     | Sensitive to outliers                                    |
+| **Function in R**        | `cor.test(x, y, method = "spearman")`             | `lm(y ~ x)`                                              |
+
+## Continuous Variable — Sequencing Depth
+
+Since this dataset does not contain continuous environmental variables (such as salinity or temperature), we will explore whether **sequencing depth** is associated with biodiversity measures across Normal and CRC samples. A significant positive relationship would indicate that observed diversity differences are at least partially driven by unequal sequencing depth, and would strengthen the case for rarefaction before making comparisons.
+
+```{r plot-div-seqdepth-lm, fig.width=7, fig.height=3.5}
+# How does biodiversity change with sequencing depth?
+obs_div_df %>%
+  dplyr::filter(Method == "Observed") %>%
+  ggplot(aes(x = Sequencing_Depth, y = qD)) + 
+  facet_wrap(.~Order.q, scales = "free") + 
+  geom_point(aes(color = ethnicity)) + 
+  scale_color_manual(values = crc_colors) + 
+  labs(x = "Sequencing Depth", y = "Effective Number of ASVs") +
+  stat_smooth(method = "lm", formula = y ~ x) + 
+  theme_bw() + 
+  theme(legend.position = "bottom",
+        legend.title = element_blank())
+```
+
+### Explore Richness vs. Sequencing Depth
+
+```{r richness-vs-seqdepth}
+# Make a richness dataframe
+richness_df <- 
+  obs_div_df %>%
+  dplyr::filter(Method == "Observed") %>%
+  dplyr::filter(Order.q == 0)
+
+# Run the linear model
+rich_vs_depth_lm <- 
+  lm(qD ~ Sequencing_Depth, data = richness_df)
+
+# Show model results
+rich_vs_depth_lm
+class(rich_vs_depth_lm)
+summary(rich_vs_depth_lm)
+```
+
+In the output:
+
+- **Coefficients** refer to the 𝛽's
+- **Estimate** is the estimate of each coefficient
+- **Std. Error** is the standard error of the estimate
+- **t value** is the coefficient divided by its standard error
+- **Pr(>|t|)** is the p-value for the coefficient
+- The **residual standard error** is the estimate of the variance of 𝜖
+- **Degrees of freedom** is the sample size minus the number of coefficients estimated
+- **R-squared** is (roughly) the proportion of variance in the outcome explained by the model. We should always report the **adjusted R-squared**, which penalizes the addition of unnecessary predictors and provides a more accurate measure of model fit.
+- The **F-statistic** compares the fit of the model as a whole to the null model (with no covariates).
+
+```{r plot-richness-seqdepth, fig.height=4, fig.width=4, warning=FALSE}
+richness_df %>%
+  ggplot(aes(x = Sequencing_Depth, y = qD)) +
+  geom_point(aes(color = ethnicity)) +
+  stat_smooth(method = "lm") +
+  labs(x = "Sequencing Depth", y = "# of ASVs") +
+  scale_color_manual(values = crc_colors) +
+  theme_bw() +
+  theme(legend.position = "bottom",
+        legend.title = element_blank()) +
+  geom_label(aes(x = max(Sequencing_Depth) * 0.5,
+                 y = min(qD) + 10), hjust = 0,
+             label = paste("Adj R2 = ", signif(summary(rich_vs_depth_lm)$adj.r.squared, 2),
+                           "\nIntercept =", signif(rich_vs_depth_lm$coef[[1]], 3),
+                           "\nSlope =", signif(rich_vs_depth_lm$coef[[2]], 2),
+                           "\nP =", signif(summary(rich_vs_depth_lm)$coef[2,4], 2)))
+```
+
+
+
+<span style="color: red;">INTERPRETATION #4: Is there a significant relationship between sequencing depth and richness (q = 0)? What about Shannon (q = 1) or Simpson (q = 2) diversity? What does this mean for the validity of your Normal vs. CRC diversity comparisons?
+
+Looking across all three Hill numbers, there is a consistent positive trend between sequencing depth and diversity at all levels of q — richness (q = 0), Shannon (q = 1), and Simpson (q = 2) all show upward-sloping regression lines as sequencing depth increases. The relationship appears strongest for richness (q = 0, Adj R² = 0.10, slope = 0.0029, Spearman R = 0.48, p = 0.0015), which is expected since richness is the most sensitive Hill number to sequencing depth — deeper sequencing is more likely to uncover rare ASVs that contribute to total richness counts. The relationships for Shannon (q = 1) and Simpson (q = 2) appear weaker and with wider confidence intervals, consistent with the fact that these metrics are less influenced by rare taxa. Importantly, the wide confidence intervals across all three panels and the substantial scatter around the regression lines indicate that sequencing depth is not the dominant driver of diversity in this dataset, but it is a detectable contributor — particularly for richness. This is an important caveat for the Normal vs. CRC diversity comparisons above: since richness differences between groups were already non-significant (p = 0.17), the confounding effect of sequencing depth makes it even more difficult to attribute any richness trend to true biological differences in community structure between CRC and Normal samples. Rarefaction or depth-normalized diversity estimates would be advisable before drawing strong conclusions about richness differences between groups.</span>
+
+<span style="color: red;">INTERPRETATION #5: How did you statistically test the relationship between sequencing depth and diversity? Why did you choose this approach?
+
+The relationship between sequencing depth and diversity was tested using two complementary approaches: a linear model (lm()) and a Spearman rank correlation. The linear model was used to quantify the effect size and direction of the relationship (slope, intercept, and adjusted R²), providing an interpretable measure of how much variance in diversity is explained by sequencing depth. The Spearman correlation was chosen over Pearson because the diversity data are not normally distributed — Spearman is non-parametric, uses ranks rather than raw values, and is more robust to the outliers visible in all three panels. Together, these two approaches are complementary: the linear model describes the magnitude and direction of the relationship, while the Spearman correlation provides a robust, assumption-free test of its statistical significance.</span>
+
+
+# Final info for Reproducibility
+
+## Check Render Time
+```{r stop-time}
+end_time <- Sys.time()
+end_time
+
+elapsed_time <- round((end_time - start_time), 3)
+elapsed_time
+```
+
+## Session Information
+```{r session-info}
+devtools::session_info()
+```
