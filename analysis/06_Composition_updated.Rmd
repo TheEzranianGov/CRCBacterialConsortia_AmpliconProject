@@ -615,6 +615,144 @@ Commensal Firmicutes ASVs (Panel D) tell the complementary story — both Gemmig
 The ASV-level patterns observed in this dataset are strongly consistent with the existing CRC microbiome literature and replicate findings from multiple independent cohorts. Fusobacterium (ASV_0005) is perhaps the most well-validated CRC-associated microorganism in the field — worldwide, unbiased genomic analyses have revealed enrichment of Fusobacterium nucleatum in human CRC relative to non-cancerous colorectal tissues, and patients with CRC tumors harboring high levels of F. nucleatum have been shown to have poorer survival outcomes. Notably, the sparse, patient-specific enrichment pattern we observed — where only a subset of CRC samples show high Fusobacterium abundance — is also consistent with the literature: Fusobacterium nucleatum was detected in approximately 23% of fresh-frozen tumor samples and only 10.5% of paired normal adjacent tissue in one Brazilian cohort, with significantly higher levels in tumor tissue. This focal, non-universal enrichment pattern is a hallmark of Fusobacterium biology in CRC. nihnih
 The enrichment of Peptostreptococcus (ASV_0017) and Streptococcus ASVs in CRC samples is equally well-supported. A meta-analysis of eleven publicly available CRC microbiome datasets confirmed that CRC tissues are enriched for oral pathogens including Fusobacterium nucleatum, Parvimonas micra, and Peptostreptococcus stomatis. Furthermore, LEfSe analysis revealed Peptostreptococcus, Streptococcus, and Solobacterium spp. at significantly higher relative abundance in saliva and stool samples of CRC patients compared with controls, with Streptococcus moorei specifically enriched in advanced-stage CRC. The consistency of the Streptococcus signal across multiple ASVs in our dataset aligns with the established finding that Peptostreptococcus anaerobius — a close relative — selectively binds to tumors and CRC cell lines and triggers downstream responses resulting in chronic inflammation and tumor progression in mouse models. Finally, the depletion of Faecalibacterium and Gemmiger in CRC samples replicates a well-known finding: Blautia and Faecalibacterium were overrepresented in normal controls compared to cancer groups across multiple cohorts — consistent with the known role of these butyrate-producing commensals in maintaining colonocyte health and anti-inflammatory immune tone. In summary, our ASV-level findings are not novel but are a meaningful replication of established CRC microbiome biology, which itself serves as a strong validation of our bioinformatic pipeline and analytical approach.</span>
 
+```{r known-crc-taxa, fig.width=12, fig.height=10}
+# ── 1. Define known CRC-associated taxa at the genus level ────────────────────
+crc_enriched_genera <- c("Fusobacterium", "Bacteroides", "Parvimonas", 
+                          "Peptostreptococcus", "Gemella")
+
+# ── 2. Run Wilcoxon tests for each genus ──────────────────────────────────────
+# Enriched genera — add Genus as a grouping column for facet matching
+wilcox_enriched <- 
+  genus_df %>%
+  dplyr::filter(Genus %in% crc_enriched_genera) %>%
+  group_by(Genus) %>%
+  wilcox_test(Abundance ~ ethnicity) %>%
+  adjust_pvalue(method = "fdr") %>%
+  add_significance(p.col = "p.adj",
+                   cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+                   symbols = c("***", "**", "*", "ns")) %>%
+  add_xy_position(x = "ethnicity", dodge = 0.8)
+
+# Check it — confirm p.adj.signif column is populated correctly
+print(wilcox_enriched[, c("Genus", "group1", "group2", "p", "p.adj", "p.adj.signif")])
+
+# Depleted genera
+wilcox_depleted <- 
+  genus_df %>%
+  dplyr::filter(Genus == "Faecalibacterium") %>%
+  group_by(Genus) %>%
+  wilcox_test(Abundance ~ ethnicity) %>%
+  adjust_pvalue(method = "fdr") %>%
+  add_significance(p.col = "p.adj",
+                   cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+                   symbols = c("***", "**", "*", "ns")) %>%
+  add_xy_position(x = "ethnicity", dodge = 0.8)
+
+# Bacteroides ASV-level
+wilcox_bacteroides <- 
+  ASV_df %>%
+  dplyr::filter(Genus == "Bacteroides") %>%
+  group_by(ASV) %>%
+  wilcox_test(Abundance ~ ethnicity) %>%
+  adjust_pvalue(method = "fdr") %>%
+  add_significance(p.col = "p.adj",
+                   cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+                   symbols = c("***", "**", "*", "ns")) %>%
+  add_xy_position(x = "ethnicity", dodge = 0.8)
+
+# ── 3. Plot CRC-enriched genera with significance ─────────────────────────────
+enriched_plot <- 
+  genus_df %>%
+  dplyr::filter(Genus %in% crc_enriched_genera) %>%
+  ggplot(aes(x = ethnicity, y = Abundance,
+             fill = ethnicity, color = ethnicity)) +
+  facet_wrap(~Genus, scales = "free_y", nrow = 1) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(title = "Enriched in CRC Tissue",
+       y = "Relative Abundance", x = "") +
+  stat_pvalue_manual(wilcox_enriched,
+                     label = "p.adj.signif",
+                     hide.ns = FALSE,
+                     tip.length = 0.01,
+                     step.increase = 0.05,
+                     inherit.aes = FALSE) +
+  theme_bw() +
+  theme(legend.position = "none",
+        strip.background = element_rect(fill = "#d4edda"),
+        strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        plot.title = element_text(color = "#28a745", face = "bold"))
+
+# ── 4. Plot CRC-depleted genera with significance ─────────────────────────────
+depleted_plot <- 
+  genus_df %>%
+  dplyr::filter(Genus == "Faecalibacterium") %>%
+  ggplot(aes(x = ethnicity, y = Abundance,
+             fill = ethnicity, color = ethnicity)) +
+  facet_wrap(~Genus, scales = "free_y", nrow = 1) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(title = "Depleted in CRC Tissue",
+       y = "Relative Abundance", x = "") +
+  stat_pvalue_manual(wilcox_depleted,
+                     label = "p.adj.signif",
+                     hide.ns = FALSE,
+                     tip.length = 0.01,
+                     step.increase = 0.05,
+                     inherit.aes = FALSE) +
+  theme_bw() +
+  theme(legend.position = "none",
+        strip.background = element_rect(fill = "#f8d7da"),
+        strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        plot.title = element_text(color = "#dc3545", face = "bold"))
+
+# ── 5. Plot Bacteroides ASVs with significance ────────────────────────────────
+top_bacter_ASVs_filtered <- 
+  ASV_df %>%
+  dplyr::filter(Genus == "Bacteroides") %>%
+  group_by(ASV) %>%
+  summarize(mean_Abundance = mean(Abundance)) %>%
+  dplyr::filter(mean_Abundance > 0.001) %>%
+  pull(ASV)
+
+protective_bacteroides_plot <- 
+  ASV_df %>%
+  dplyr::filter(Genus == "Bacteroides") %>%
+  dplyr::filter(ASV %in% top_bacter_ASVs_filtered) %>%
+  ggplot(aes(x = ethnicity, y = Abundance,
+             fill = ethnicity, color = ethnicity)) +
+  facet_wrap(~ASV, scales = "free_y", nrow = 2) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(title = "Bacteroides ASVs",
+       y = "Relative Abundance", x = "",
+       caption = "B. fragilis (ETBF) enriched in CRC; B. vulgatus, B. dorei, B. stercoris depleted") +
+  stat_pvalue_manual(wilcox_bacteroides %>% 
+                       dplyr::filter(ASV %in% top_bacter_ASVs_filtered),
+                     label = "p.adj.signif",
+                     hide.ns = FALSE,
+                     tip.length = 0.01,
+                     step.increase = 0.05,
+                     inherit.aes = FALSE) +
+  theme_bw() +
+  theme(legend.position = "none",
+        strip.background = element_rect(fill = "#fff3cd"),
+        strip.text = element_text(face = "bold", size = 7),
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        plot.caption = element_text(face = "italic"))
+
+# ── 6. Combine all plots ──────────────────────────────────────────────────────
+enriched_plot / depleted_plot / protective_bacteroides_plot +
+  plot_annotation(title = "Known CRC-Associated Taxa: Enriched vs. Depleted")
+```
 
 # Session Information 
 For reproducibility 
