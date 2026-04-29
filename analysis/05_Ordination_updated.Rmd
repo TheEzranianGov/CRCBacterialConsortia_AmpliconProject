@@ -20,6 +20,7 @@ editor_options:
 
 
 ```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = "/workdir/eas456/CRCBacterialConsortia_AmpliconProject")  # ← set to your actual project root
 knitr::opts_chunk$set(echo = TRUE, 
                       fig.path = "../../figures/05_Ordination/")
 ```
@@ -240,7 +241,10 @@ scaledSeq_histogram + scaledSeq_vs_numASV_plot +
   plot_annotation(tag_levels = "A")
 ```
 
-<span style="color: red;">INTERPRETATION #3: Evaluate the scaled read count plots above. Are the total number of sequences across all of your samples in the same general range? What is the minimum and maximum (i.e., the range) of the sequencing depth? What does this tell you about the relationship between sequencing depth and the observed number of ASVs?</span>
+<span style="color: red;">INTERPRETATION #3: Evaluate the scaled read count plots above. Are the total number of sequences across all of your samples in the same general range? What is the minimum and maximum (i.e., the range) of the sequencing depth? What does this tell you about the relationship between sequencing depth and the observed number of ASVs?
+
+Panel A (Histogram) confirms that rarefaction was highly effective: all samples are now concentrated in an extremely narrow band between approximately 68,200 and 68,310 reads, representing a range of only ~110 reads. The tight clustering of bars around 68,270–68,280 reads confirms that sequencing depth has been successfully equalized across all 41 samples. The few samples sitting slightly outside this core cluster are within rounding tolerance of the matround function, which is expected behavior when rarefying count data.
+Panel B (Scaled Seq Depth vs. # ASVs) is the most important diagnostic plot here. Unlike Panel B in the raw read count figure — which showed a clear positive trend between depth and ASV richness — the scaled version shows no relationship whatsoever between sequencing depth and the number of observed ASVs. Points are scattered randomly across a nearly flat horizontal band, and the y-axis range (~68,200–68,310) is so compressed that any remaining variation is essentially noise introduced by integer rounding during rarefaction. This is exactly what we want to see — it confirms that sequencing depth is no longer a confounding variable in our dataset. Any differences in ASV richness or community composition that we observe in subsequent beta diversity analyses can therefore be attributed to true biological differences between CRC and Normal samples, rather than to technical artifacts of unequal sequencing depth.</span>
 
 
 ## Save Scaled Reads
@@ -290,43 +294,99 @@ In short: dissimilarity tells us how different things are—just like distance. 
 | Are there differences in the evolutionary history of microbes between samples?  | UniFrac (unweighted or weighted)   |
 | Do dominant, evolutionarily distinct microbes vary in abundance?                | Weighted UniFrac                   |
 
-Choosing the right dissimilarity measure starts with understanding what aspect of community difference you're trying to capture. If you're asking whether two environments simply contain the same taxa—regardless of how abundant those taxa are—then presence/absence-based measures like **Jaccard** or **Sorensen-Dice** are appropriate. If you're interested in how **abundant** different taxa are across communities, then **Bray-Curtis** is a better choice. When phylogenetic information is available, **UniFrac** metrics can be used to assess evolutionary divergence between communities.
+Choosing the right dissimilarity measure starts with understanding what aspect of community difference you're trying to capture. If you're asking whether two environments simply contain the same taxa—regardless of how abundant those taxa are—then presence/absence-based measures like **Jaccard** or **Sorensen-Dice** are appropriate. These metrics are particularly useful when working with rarefied data, or when you're more concerned with community membership than abundance.
+
+If you're interested in how **abundant** different taxa are across communities—especially if dominant taxa may be ecologically important—then an abundance-based metric like **Bray-Curtis** is a better choice. Bray-Curtis emphasizes changes in relative abundance and is sensitive to shifts in dominant taxa, making it useful for studying processes like competitive exclusion or resource-driven community turnover.
+
+When your data include **phylogenetic information**—for example, from 16S rRNA gene amplicon sequencing—you may want to use **UniFrac** metrics. **Unweighted UniFrac** is good for detecting evolutionary differences based on presence/absence (i.e., whether the communities harbor different lineages), while **Weighted UniFrac** incorporates both **phylogeny and abundance**, allowing you to explore whether communities differ in their evolutionary makeup **and** in the dominance of certain lineages. These are especially useful when you care about deep evolutionary divergence or when function may correlate with phylogeny.
+
+Practical considerations also matter. For example, UniFrac requires a phylogenetic tree, which takes time and computation to build; Bray-Curtis and Jaccard don’t. Some metrics are also more sensitive to sampling depth and rare taxa, so normalization or rarefaction methods may be necessary before analysis.
 
 In short, let your **ecological question** guide your metric choice: use **presence/absence** metrics to assess "who's there," **abundance-based** metrics to examine "how much is there," and **phylogenetic** metrics to explore "how evolutionarily different are these communities." Often, using **multiple metrics in parallel** can help reveal different facets of the data and strengthen your ecological interpretations.
 
-| Metric              | Type                | Uses Abundance | Uses Phylogeny |
-|---------------------|---------------------|----------------|----------------|
-| Jaccard             | Presence/absence    | ❌             | ❌             |
-| Sorensen-Dice       | Presence/absence    | ❌             | ❌             |
-| Bray-Curtis         | Abundance-based     | ✅             | ❌             |
-| Unweighted UniFrac  | Phylogenetic + presence/absence | ❌ | ✅ |
-| Weighted UniFrac    | Phylogenetic + abundance-based | ✅ | ✅ |
+These dissimilarity measures are foundational tools in microbial ecology and are often visualized using **ordination methods** (e.g., PCoA, NMDS) to interpret community shifts across environments, treatments, or gradients.
+
+| Metric              | Type                | Similarity Formula | Dissimilarity Formula       | Uses Abundance | Uses Phylogeny |
+|---------------------|---------------------|--------------------|-----------------------------|----------------|----------------|
+| Jaccard             | Presence/absence    | \( \frac{A}{A+B+C} \) | \( \frac{B+C}{A+B+C} \)     | ❌             | ❌             |
+| Sorensen-Dice       | Presence/absence    | \( \frac{2A}{2A+B+C} \) | \( \frac{B+C}{2A+B+C} \)     | ❌             | ❌             |
+| Bray-Curtis         | Abundance-based     | —                  | \( \frac{\sum |a_i - b_i|}{\sum (a_i + b_i)} \) | ✅ | ❌ |
+| Unweighted UniFrac  | Phylogenetic + presence/absence | — | \( \frac{\text{unique branch}}{\text{total branch}} \) | ❌ | ✅ |
+| Weighted UniFrac    | Phylogenetic + abundance-based | — | \( \frac{\text{weighted unique branch}}{\text{total branch}} \) | ✅ | ✅ |
 
 ## Five Types of Dissimilarities
 
 ### A. Jaccard Dissimilarity
 
 - **Type:** Presence/absence
+- **Formula:**  
+  \[
+  D_J = \frac{B + C}{A + B + C}
+  \]
+  Where:  
+  - *A* = number of taxa shared by both samples  
+  - *B* = taxa unique to sample 1  
+  - *C* = taxa unique to sample 2
+
+- **Interpretation:** Measures dissimilarity in community **membership**—i.e., how many taxa are **not shared** between the samples.
+
 - **Ecological question:**  *How unique are the species between two communities, ignoring abundance?*
 
 ### B. Sorensen-Dice Dissimilarity
 
 - **Type:** Presence/absence (weighted toward shared taxa)
+- **Similarity formula**:  
+  \[
+  S_S = \frac{2A}{2A + B + C}
+  \]
+- **Dissimilarity formula**:  
+  \[
+  D_S = 1 - S_S = \frac{B + C}{2A + B + C}
+  \]
+
+- **Interpretation:** Similar to Jaccard, but gives **greater weight to shared taxa**, making it more sensitive to overlap in community membership. The Sorensen-Dice is mathematically similar to Bray-Curtis, which makes it a nice side-by-side comparison with Bray-Curtis. 
+
 - **Ecological question:** *To what extent do two communities differ in presence/absence, giving extra credit for shared species?*
 
 ### C. Bray-Curtis Dissimilarity
 
 - **Type:** Abundance-based
+- **Formula:**  
+  \[
+  BC_{AB} = \frac{\sum_{k=1}^{S} \left| x_{Ak} - x_{Bk} \right|}{\sum_{k=1}^{S} \left( x_{Ak} + x_{Bk} \right)}
+  \]
+  Where:  
+  - \( BC_{AB} \): Bray-Curits dissimilarity between sample **A** and sample **B**.
+  - *S*: Total number of species or ASVs.
+  - \( x_{Ak} \): Abundance of species *k* in sample **A**  
+  - \( x_{Bk} \): Abundance of species *k* in sample **B**
+
+- **Interpretation:** Quantifies dissimilarity based on **abundance differences**—especially sensitive to changes in dominant taxa. Often, it is run together with the Sorensen-Dice dissimilarity as these two metrics are mathematically similar. 
+
 - **Ecological question:** *How different are two communities in terms of the* ***abundance*** *of shared and unique taxa?*
 
 ### D. Unweighted UniFrac Dissimilarity
 
 - **Type:** Phylogenetic, presence/absence
+- **Formula (conceptual):**  
+  \[
+  D_{UU} = \frac{\text{Unique branch length}}{\text{Total branch length}}
+  \]
+
+- **Interpretation:** Measures the proportion of **phylogenetic branch lengths** that are unique to either sample, ignoring abundance. This measure requires a curated and a rooted tree, ideally within a meaningful outgroup, like the Archaea. The curation and visual inspection of the tree is important as this metric is very sensitive to long branches! Therefore, we need to do our diligence with the quality of our input tree. 
+
 - **Ecological question:**  *How evolutionarily distinct are the community members between samples, regardless of how abundant they are?*
 
 ### E. Weighted UniFrac Dissimilarity
 
 - **Type:** Phylogenetic, abundance-weighted
+- **Formula (conceptual):**  
+  \[
+  D_{WU} = \frac{\text{Abundance-weighted unique branch length}}{\text{Total branch length}}
+  \]
+
+- **Interpretation:** Combines **phylogeny and abundance**—emphasizes both how evolutionarily distinct and how **numerically different** the communities are, giving more weight to abundant taxa. This measure requires a curated and a rooted tree, ideally within a meaningful outgroup, like the Archaea. The curation and visual inspection of the tree is important as this metric is very sensitive to long branches! Therefore, we need to do our diligence with the quality of our input tree. 
+
 - **Ecological question:** *How much do two communities differ in the* ***abundance of evolutionarily distinct*** *lineages?*
 
 # 4. Calculating dissimilarity
@@ -343,12 +403,16 @@ str(scaled_sorensen_dist)
 # Bray-Curtis Dissimilarity (abundance-weighted)
 scaled_bray_dist <- phyloseq::distance(scaled_physeq, method = "bray", binary = FALSE)
 
-# UniFrac metrics are commented out as they require a rooted phylogenetic tree
+# UniFrac metrics are commented out as they require a rooted phylogenetic tree, which we don't have
 # scaled_uUnifrac_dist <- phyloseq::distance(scaled_physeq, method = "unifrac")
 # scaled_wUnifrac_dist <- phyloseq::distance(scaled_physeq, method = "wunifrac")
 ```
 
-<span style="color: red;">INTERPRETATION #4: Which dissimilarity metric is most related to your scientific question? Why or why not?</span>
+<span style="color: red;">INTERPRETATION #4: Which dissimilarity metric is most related to your scientific question? Why or why not?
+
+Both Sorensen and Bray-Curtis dissimilarity are relevant to our scientific question, and we will use both in parallel — but for different reasons. Our primary question asks whether gut microbial community composition differs between CRC and Normal colon tissue samples, which inherently has two dimensions: changes in which taxa are present and changes in how abundant those taxa are.
+The Bray-Curtis dissimilarity is arguably most directly aligned with our scientific question. CRC is associated with well-documented shifts in the relative abundances of specific bacterial taxa — including blooms of pathobionts like Fusobacterium nucleatum and depletions of butyrate-producing commensals like Faecalibacterium prausnitzii. These are fundamentally abundance-based phenomena, and Bray-Curtis is specifically sensitive to these kinds of dominant taxon shifts. It will capture whether the CRC microbiome is not just compositionally different in membership, but also ecologically reorganized in terms of which taxa dominate.
+However, the Sorensen dissimilarity is equally important to include. As noted above, the human gut microbiome harbors a vast repertoire of rare taxa that make biologically significant contributions to gut ecology and commensalism — including roles in immune education, competitive exclusion of pathogens, and short-chain fatty acid production. Sorensen treats all taxa equally regardless of abundance, making it sensitive to the loss or gain of rare but ecologically important community members that Bray-Curtis might overlook. Running both metrics together gives us the most complete picture: Sorensen tells us whether CRC and Normal communities differ in who is there, while Bray-Curtis tells us whether they differ in who dominates.</span>
 
 
 # 5. Visualize Community Dissimilarity with Ordination

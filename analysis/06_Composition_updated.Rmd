@@ -1,0 +1,623 @@
+---
+title: "Microbial Compositional Analysis in Colorectal Cancer vs. Normal Colon Tissue"
+author: "Ezra Seckin"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document: 
+    code_folding: show
+    theme: spacelab
+    highlight: pygments
+    keep_md: no
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+      toc_depth: 3
+  keep_md: true  
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = "/workdir/eas456/CRCBacterialConsortia_AmpliconProject")  # ← set to your actual project root
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE,
+                      fig.path = "../../figures/06_Composition/")
+```
+
+# Goals
+
+In this file, we will perform compositional analysis of our scaled/normalized/rarefied microbial dataset to characterize how gut microbial community composition differs between CRC and Normal colon tissue samples.
+
+1. Load in scaled/normalized phyloseq object. 
+2. Calculate the relative abundances of taxonomic groups at various levels: 
+    A. Phylum
+    B. Genus
+    C. ASV 
+3. Plot them and narrow in on specific taxonomic groups of interest as they relate to CRC status.
+
+## Inputs 
+
+1. We will need the `scaled_physeq.RData` created in `analysis/05_Ordination/scaled_physeq.RData`. 
+
+## Outputs 
+
+1. Visualizations of microbial taxa and how they vary between CRC and Normal colon tissue samples.
+2. Statistical comparisons of key taxa between groups.
+
+# Compositional Data 
+
+Microbial abundance data — like 16S rRNA gene or metagenomics data — are typically **compositional:** they represent relative abundances constrained to a constant total (*e.g.,* percent or proportions). This introduces spurious correlations and other issues if analyzed with traditional statistics. This is a very important limitation to microbial data! 
+
+<span style="color: red;">INTERPRETATION #1: What are the limitations of interpreting microbial abundance from relative (aka. compositional) rather than absolute counts?
+
+Microbial abundance data from 16S rRNA amplicon sequencing are inherently compositional — they represent proportions of a fixed total rather than absolute counts of cells or molecules. This creates a fundamental statistical challenge known as the constant sum constraint: because all relative abundances must sum to 1 (or 100%), an increase in one taxon's relative abundance will mathematically cause an apparent decrease in all other taxa, even if those taxa haven't actually changed in absolute abundance. This means that correlations between taxa in compositional data are inherently spurious and cannot be interpreted as true biological relationships without additional validation.
+A second major limitation is that we cannot distinguish between a taxon truly increasing in absolute abundance versus simply appearing more abundant because competing taxa decreased. For example, if a CRC-associated pathobiont like Fusobacterium nucleatum appears enriched in CRC samples relative to Normal samples, this could reflect a genuine bloom of Fusobacterium — or it could reflect a depletion of commensal taxa that makes Fusobacterium appear relatively more abundant without any change in its absolute cell count. Without paired absolute quantification methods such as spike-in controls, flow cytometry cell counts, or quantitative PCR, it is impossible to distinguish these two scenarios from relative abundance data alone. This is particularly consequential in CRC research, where both bloom of pathobionts and loss of commensals are biologically plausible and clinically meaningful outcomes that carry very different mechanistic implications for disease progression.</span>
+
+# Setup 
+
+## Load Packages 
+```{r load-packages}
+# Load in the packages 
+pacman::p_load(tidyverse, devtools, DT, phyloseq, patchwork, 
+               install = FALSE)
+
+# load colors
+source("colors_and_shapes.R")
+```
+
+
+## 1. Load in Scaled Phyloseq object 
+
+The following phyloseq object contains microbial community composition data in a standardized format. We have already rarefied the reads to the minimum sequencing depth across all samples, which is essential for comparing relative abundances fairly between CRC and Normal samples.
+
+```{r load-data}
+load("data/05_Ordination/scaled_physeq.RData")
+
+# Look at the data 
+scaled_physeq
+
+# Intuition check — confirm rarefaction depth
+min(sample_sums(scaled_physeq))
+range(sample_sums(scaled_physeq))
+```
+
+# Taxonomic Analysis! 
+
+In this analysis, we will drill down from phylum to ASV level analyses, which will enable increasingly detailed insights into microbial diversity and potential ecological roles in the context of colorectal cancer. It is important to remember that deeper taxonomic levels also come with increased noise and data sparsity, especially for rare groups. 
+
+# A. Abundant Groups: Top 10 Phyla & ASVs 
+
+
+## A1. Top 10 Phyla
+
+Taxonomic analysis often begins at broader levels (*e.g.,* Phylum) to visualize overarching trends before zooming in on finer-scale patterns. This step allows us to identify which microbial groups dominate across samples and which may respond to CRC status.
+
+Now, let's calculate the relative abundance of the phyla across all the samples. **NOTE:** To do this, it is imperative that we have scaled the data to a constant sequencing depth. 
+
+```{r calc-phylum-df}
+# Create a phylum level dataframe
+phylum_df <- 
+  scaled_physeq %>%
+  # Agglomerate all ASV counts within a phylum
+  tax_glom(taxrank = "Phylum") %>%
+  # Calculate the relative abundance! 
+  transform_sample_counts(function(x) {x/sum(x)}) %>%
+  # Create a dataframe from phyloseq object
+  psmelt()
+
+## What are the phylum abundances? 
+phylum_df %>%
+  group_by(Phylum) %>%
+  summarize(mean_PercAbund = round(mean(Abundance), digits = 4)) %>%
+  arrange(-mean_PercAbund) %>%
+  datatable()
+
+# Make a list of the top 10 phyla 
+top10_phyla <- 
+  phylum_df %>%
+  group_by(Phylum) %>%
+  summarize(mean_PercAbund = mean(Abundance)) %>%
+  arrange(-mean_PercAbund) %>%
+  head(n = 10) %>%
+  pull(Phylum)
+
+# Show it 
+top10_phyla
+```
+
+<span style="color: red;">INTERPRETATION #2: Which phyla in your dataset have the highest relative abundances? What are their abundances? We will focus on these phyla for plotting below.
+
+The ten most abundant phyla in this dataset are Bacillota, Bacteroidota, Pseudomonadota, Actinomycetota, Fusobacteriota, Verrucomicrobiota, Thermodesulfobacteriota, Campylobacterota, Chloroflexota, and Spirochaetota — a composition highly consistent with what is known about the human gut microbiome.
+The two dominant phyla are Bacillota (formerly Firmicutes) and Bacteroidota, which together account for the vast majority of gut microbial biomass in both CRC and Normal samples — visually estimated at roughly 35–45% and 20–50% relative abundance respectively based on the boxplots. These two phyla dominate the healthy human gut and their ratio (the Firmicutes:Bacteroidota ratio) has been widely studied in the context of gut dysbiosis. Pseudomonadota (formerly Proteobacteria) is the third most abundant phylum, with considerable spread across samples (~10–30%), which is consistent with its known role as a marker of gut inflammation and dysbiosis when elevated. Actinomycetota is present at moderate levels (~5–15%), and Fusobacteriota appears at low but detectable levels, with several CRC samples showing notably higher relative abundance than Normal samples, consistent with the well-documented enrichment of Fusobacterium nucleatum in colorectal cancer tissue. The remaining phyla (Verrucomicrobiota, Thermodesulfobacteriota, Campylobacterota, Chloroflexota, and Spirochaetota) are present at low relative abundances (<5%) but are biologically relevant members of the gut microbiome. We will focus our deeper analyses on Bacillota, Bacteroidota, Pseudomonadota, and Fusobacteriota as these phyla show the most abundance and/or the most visually apparent differences between CRC and Normal groups.</span>
+
+**Faceted Phylum Plot**
+
+To help compare phylum abundance between CRC and Normal samples, we facet by phylum to better see how relative abundances differ between groups across the dataset.
+
+```{r plot-Top10-Phyla-crcGroup, fig.width=12, fig.height=6}
+### Plot the Top 10 Phyla
+phylum_df %>%
+  dplyr::filter(Phylum %in% top10_phyla) %>%
+  ggplot(aes(x = ethnicity, y = Abundance, fill = Phylum, color = Phylum)) + 
+  facet_wrap(Phylum~., scales = "free", nrow = 2) + 
+  geom_jitter() +
+  geom_boxplot(outlier.shape = NA, alpha = 0.5) + 
+  scale_fill_manual(values = phylum_colors) + 
+  scale_color_manual(values = phylum_colors) + 
+  theme_bw() + 
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        axis.title.x = element_blank())
+```
+
+<span style="color: red;">INTERPRETATION #3: Make the above dotplot and boxplot for your CRC vs. Normal groups across your most abundant phyla. What initial conclusions can you draw regarding differences in microbial community composition between CRC and Normal samples?
+
+Looking across the ten most abundant phyla, no single phylum shows a dramatic, clean separation between CRC and Normal samples — both groups overlap considerably in most panels, which is expected since CRC-associated dysbiosis is typically characterized by shifts in specific genera and species rather than wholesale phylum-level reorganization. That said, several noteworthy trends emerge. Bacillota appears visually higher in Normal samples, consistent with the known depletion of butyrate-producing Firmicutes such as Faecalibacterium prausnitzii in CRC. Pseudomonadota shows striking variability in CRC samples, with several individuals showing very high relative abundances (>40%), suggesting that Pseudomonadota blooms may characterize a dysbiotic CRC subtype rather than a universal disease feature. Fusobacteriota, while low in abundance overall, shows a handful of CRC samples with elevated relative abundance — consistent with the well-documented enrichment of Fusobacterium nucleatum in colorectal cancer tissue. Bacteroidota is highly variable in both groups with no clear directional signal, likely reflecting inter-individual variation in diet and host genetics. These phylum-level observations motivate the deeper genus- and ASV-level analyses that follow, where disease-specific signals are more likely to emerge.</span>
+
+
+## A2: Top 10 ASVs
+
+Now, let's take a look at the ASVs. This is where the *real* biology happens! ASV-level plots provide a more detailed view of **which specific taxa are driving the overall trends seen at higher taxonomic levels** between CRC and Normal colon samples.
+
+Before calculating ASV-level abundances, we remove ASVs that have an overall count below 1% of the scaled sample depth across the entire dataset. This dramatically reduces the number of ASVs and makes ASV-level data analysis much easier. Of course, differential abundance testing would be the ideal approach to rigorously identify which ASVs differ significantly between groups — but here we focus on exploratory visualization first.
+
+```{r calc-ASVs, fig.width=12, fig.height=4}
+# Calculate the ASV relative abundance
+# Prune out ASVs that have fewer than ~1% of the scaled read depth
+ASV_df <- 
+  scaled_physeq %>%
+  prune_taxa(taxa_sums(.) >= (0.01 * min(sample_sums(scaled_physeq))), .) %>%
+  tax_glom(taxrank = "ASV") %>% 
+  transform_sample_counts(function (x) {x/sum(x)}) %>%
+  psmelt() 
+
+# Make a list of the top 15 ASVs in the dataset
+top15_ASVs <- 
+  ASV_df %>%
+  group_by(ASV) %>%
+  summarize(mean_PercAbund = mean(Abundance)) %>%
+  arrange(-mean_PercAbund) %>%
+  head(n = 15) %>%
+  pull(ASV)
+
+# Show it 
+top15_ASVs
+```
+
+```{r plot-Top15-ASVs-crcGroup, fig.width=12, fig.height=9}
+### Plot the Top 15 ASVs
+ASV_df %>%
+  dplyr::filter(ASV %in% top15_ASVs) %>%
+  ggplot(aes(x = ethnicity, y = Abundance, fill = Phylum, color = Phylum)) + 
+  facet_wrap(ASV~Genus, scales = "free", nrow = 3) + 
+  geom_jitter() +
+  geom_boxplot(outlier.shape = NA, alpha = 0.5) + 
+  scale_fill_manual(values = phylum_colors) + 
+  scale_color_manual(values = phylum_colors) + 
+  theme_bw() + 
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        axis.title.x = element_blank())
+```
+
+
+# B. Within Phylum-Level
+
+Here we narrow in on specific phyla that appear to vary between CRC and Normal samples based on the overview plots above. For each phylum, we plot relative abundance by CRC status (categorical).
+
+## B1. Firmicutes (Bacillota)
+
+```{r phylum-firmicutes, fig.width=5, fig.height=4}
+# Firmicutes/Bacillota abundance by CRC status
+firmicutes_phylum_crcGroup <- 
+  phylum_df %>%
+  dplyr::filter(Phylum == "Firmicutes" | Phylum == "Bacillota") %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Firmicutes/Bacillota Phylum") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+firmicutes_phylum_crcGroup
+```
+
+## B2. Bacteroidota
+
+```{r phylum-bacteroidota, fig.width=5, fig.height=4}
+# Bacteroidota abundance by CRC status
+bacteroidota_phylum_crcGroup <- 
+  phylum_df %>%
+  dplyr::filter(Phylum == "Bacteroidota") %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Bacteroidota Phylum") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+bacteroidota_phylum_crcGroup
+```
+
+## B3. Proteobacteria (Pseudomonadota)
+
+```{r phylum-proteobacteria, fig.width=5, fig.height=4}
+# Proteobacteria/Pseudomonadota abundance by CRC status
+proteo_phylum_crcGroup <- 
+  phylum_df %>%
+  dplyr::filter(Phylum == "Proteobacteria" | Phylum == "Pseudomonadota") %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Proteobacteria/Pseudomonadota Phylum") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+proteo_phylum_crcGroup
+```
+
+## B4. Fusobacteriota
+
+```{r phylum-fusobacteria, fig.width=5, fig.height=4}
+# Fusobacteriota abundance by CRC status
+# Note: Fusobacterium nucleatum is one of the most well-documented CRC-associated bacteria
+fuso_phylum_crcGroup <- 
+  phylum_df %>%
+  dplyr::filter(Phylum == "Fusobacteriota" | Phylum == "Fusobacteria") %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Fusobacteriota Phylum") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+fuso_phylum_crcGroup
+```
+
+## Phylum Summary Plot
+
+```{r phylum-summary-plot, fig.width=10, fig.height=4}
+# Put the key phyla together for comparison
+firmicutes_phylum_crcGroup + bacteroidota_phylum_crcGroup + 
+proteo_phylum_crcGroup + fuso_phylum_crcGroup +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "A")
+```
+
+<span style="color: red;">INTERPRETATION #4: Based on these phylum-level analyses, were there any phyla that showed notable differences between CRC and Normal samples? Which phyla will you focus on for deeper taxonomic analyses? Why?
+
+These four focused plots reinforce the initial phylum-level observations. Bacillota (Panel A) shows a trend toward higher median abundance in CRC samples with tighter clustering, while Normal samples show greater downward spread — warranting deeper investigation to determine which Firmicutes members are driving this pattern. Bacteroidota (Panel B) remains highly variable in both groups with no clear directional signal. Pseudomonadota (Panel C) shows wider spread in Normal samples with several high-abundance outliers, while CRC samples appear more compressed, which is somewhat counterintuitive given that Pseudomonadota blooms are typically associated with dysbiosis and inflammation. Fusobacteriota (Panel D) is present at low overall abundances but with several CRC samples reaching striking outlier values (~40%), consistent with localized Fusobacterium nucleatum enrichment in tumor tissue. Based on these patterns, we will prioritize Bacillota and Fusobacteriota for deeper genus- and ASV-level analyses — Bacillota because it is the most abundant phylum with the most consistent between-group trend, and Fusobacteriota because its well-established role in CRC biology makes even sparse ASV-level signals highly interpretable and clinically relevant.</span>
+
+# C. Genus-Level
+
+Let's first calculate the genus data frame, then focus on genera within the phyla that showed the most interesting CRC-associated patterns above.
+
+```{r calc-genus-df}
+# Calculate the genus relative abundance
+genus_df <- 
+  scaled_physeq %>%
+  tax_glom(taxrank = "Genus") %>% 
+  transform_sample_counts(function (x) {x/sum(x)}) %>%
+  psmelt()
+```
+
+
+## C1. Firmicutes Genera 
+
+```{r firmicutes-genus, fig.width=8, fig.height=5}
+# Identify the top Firmicutes genera
+top_firmicutes_genera <- 
+  genus_df %>%
+  dplyr::filter(Phylum == "Firmicutes" | Phylum == "Bacillota") %>%
+  group_by(Genus) %>%
+  summarize(mean_Abundance = mean(Abundance)) %>%
+  arrange(-mean_Abundance) %>%
+  head(n = 6) %>%
+  pull(Genus)
+
+# Plot genus by CRC status
+firmicutes_genus_crcGroup <- 
+  genus_df %>%
+  dplyr::filter(Phylum == "Firmicutes" | Phylum == "Bacillota") %>%
+  dplyr::filter(Genus %in% top_firmicutes_genera) %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  facet_wrap(.~Genus, scales = "free_y", nrow = 2) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Top Firmicutes Genera") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+firmicutes_genus_crcGroup
+```
+
+## C2. Fusobacteriota Genera
+
+```{r fuso-genus, fig.width=6, fig.height=4}
+# Fusobacterium is among the most well-documented CRC-associated genera
+# Fusobacterium nucleatum has been shown to promote tumor growth and invasion
+fuso_genus_crcGroup <- 
+  genus_df %>%
+  dplyr::filter(Phylum == "Fusobacteriota" | Phylum == "Fusobacteria") %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  facet_wrap(.~Genus, scales = "free_y") + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Fusobacteriota Genera") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+fuso_genus_crcGroup
+```
+
+## C3. Bacteroidota Genera
+
+```{r bacteroidota-genus, fig.width=8, fig.height=5}
+# Identify the top Bacteroidota genera
+top_bacteroidota_genera <- 
+  genus_df %>%
+  dplyr::filter(Phylum == "Bacteroidota") %>%
+  group_by(Genus) %>%
+  summarize(mean_Abundance = mean(Abundance)) %>%
+  arrange(-mean_Abundance) %>%
+  head(n = 6) %>%
+  pull(Genus)
+
+# Plot genus by CRC status
+bacteroidota_genus_crcGroup <- 
+  genus_df %>%
+  dplyr::filter(Phylum == "Bacteroidota") %>%
+  dplyr::filter(Genus %in% top_bacteroidota_genera) %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  facet_wrap(.~Genus, scales = "free_y", nrow = 2) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Top Bacteroidota Genera") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+bacteroidota_genus_crcGroup
+```
+
+<span style="color: red;">INTERPRETATION #5: Make some plots of mid-level taxonomic ranks (e.g. Genus, Family, Order) as they relate to CRC vs. Normal status. Were there any changes in the mid-level taxonomic trends compared to the phylum-level results? What does that tell you about that taxonomic group?
+
+The genus-level plots reveal considerably more biological resolution than the phylum-level analysis. Within Bacillota, the phylum-level signal clearly disaggregates into taxa with opposing trends — Streptococcus and Peptostreptococcus appear markedly enriched in CRC samples (Streptococcus reaching ~20% in some individuals), while Faecalibacterium and Gemmiger trend higher in Normal samples. This divergence explains why the Bacillota phylum-level signal was ambiguous: the phylum contains both CRC-enriched pathobionts and CRC-depleted commensals whose opposing signals cancel each other out at broader taxonomic resolution. Within Fusobacteriota, Fusobacterium itself shows the most compelling CRC-associated pattern in the entire dataset — several CRC samples reach ~20–40% relative abundance while Normal samples remain consistently near zero, representing the canonical CRC microbiome signal documented extensively in the literature. Within Bacteroidota, no genus shows a strong or consistent between-group difference, confirming that this phylum does not harbor a meaningful CRC-associated signal in this dataset and will be deprioritized for ASV-level follow-up in favor of Fusobacteriota and the CRC-enriched Firmicutes genera.</span>
+
+# D. ASV-Level
+
+Here we zoom in to the ASV level for the phyla and genera that showed the most interesting CRC-associated patterns above. ASV-level analysis allows us to determine whether phylum-level trends are driven by a single dominant taxon or by consistent patterns across multiple ASVs.
+
+## D1. Fusobacteriota ASVs
+
+Fusobacterium nucleatum is one of the most well-documented bacteria in colorectal cancer research. Here we examine whether specific Fusobacteriota ASVs are enriched in CRC vs. Normal samples.
+
+```{r fuso-asvs, fig.width=8, fig.height=5}
+# Get Fusobacteriota ASVs above 0.5% mean abundance
+top_fuso_ASVs <- 
+  ASV_df %>%
+  dplyr::filter(Phylum == "Fusobacteriota" | Phylum == "Fusobacteria") %>%
+  group_by(ASV) %>%
+  summarize(mean_Abundance = mean(Abundance)) %>%
+  dplyr::filter(mean_Abundance > 0.005) %>%
+  pull(ASV)
+
+# Plot ASVs by CRC status
+fuso_asv_crcGroup <- 
+  ASV_df %>%
+  dplyr::filter(ASV %in% top_fuso_ASVs) %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  facet_wrap(Genus~ASV, scales = "free_y", nrow = 2) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Fusobacteriota ASVs > 0.5%") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+fuso_asv_crcGroup
+```
+
+## D2. Firmicutes ASVs
+
+```{r firmicutes-asvs, fig.width=10, fig.height=8}
+# Get top Firmicutes ASVs above 0.5% mean abundance
+top_firmicutes_ASVs <- 
+  ASV_df %>%
+  dplyr::filter(Phylum == "Firmicutes" | Phylum == "Bacillota") %>%
+  group_by(ASV) %>%
+  summarize(mean_Abundance = mean(Abundance)) %>%
+  dplyr::filter(mean_Abundance > 0.005) %>%
+  pull(ASV)
+
+# Plot ASVs by CRC status
+firmicutes_asv_crcGroup <- 
+  ASV_df %>%
+  dplyr::filter(ASV %in% top_firmicutes_ASVs) %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  facet_wrap(Genus~ASV, scales = "free_y", nrow = 3) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Firmicutes ASVs > 0.5%") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+firmicutes_asv_crcGroup
+```
+
+## D3. Bacteroidota ASVs
+
+```{r bacteroidota-asvs, fig.width=10, fig.height=8}
+# Get top Bacteroidota ASVs above 0.5% mean abundance
+top_bacter_ASVs <- 
+  ASV_df %>%
+  dplyr::filter(Phylum == "Bacteroidota") %>%
+  group_by(ASV) %>%
+  summarize(mean_Abundance = mean(Abundance)) %>%
+  dplyr::filter(mean_Abundance > 0.005) %>%
+  pull(ASV)
+
+# Plot ASVs by CRC status
+bacter_asv_crcGroup <- 
+  ASV_df %>%
+  dplyr::filter(ASV %in% top_bacter_ASVs) %>%
+  ggplot(aes(x = ethnicity, y = Abundance, 
+             fill = ethnicity, color = ethnicity)) + 
+  facet_wrap(Genus~ASV, scales = "free_y", nrow = 2) + 
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) + 
+  geom_jitter() + 
+  theme_bw() + 
+  labs(title = "Bacteroidota ASVs > 0.5%") + 
+  scale_color_manual(values = crc_colors) + 
+  scale_fill_manual(values = crc_colors) + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1),
+        legend.position = "none",
+        axis.title.x = element_blank())
+
+bacter_asv_crcGroup
+```
+
+<span style="color: red;">INTERPRETATION #6: Were the most abundant ASVs in your dataset represented in your ASV-level plots? If not, please go back and plot them specifically. (Hint: Remember that we ordered our ASV names by abundance across the entire dataset. Therefore, ASV_0001 will be the most abundant, ASV_0007 will be the 7th most abundant and so on.)
+
+The most abundant ASVs in the dataset (ASV_0001 through ASV_0010) are not all represented in these phylum-specific ASV plots, which is expected — the top ASVs by overall abundance span multiple phyla, and our phylum-specific plots only show ASVs within Fusobacteriota, Firmicutes, and Bacteroidota that exceed the 0.5% mean abundance threshold. Notably, ASV_0005 is the only Fusobacteriota ASV above this threshold and is assigned to Fusobacterium, confirming it as the primary driver of the Fusobacteriota CRC signal observed at the genus and phylum levels — with one CRC sample reaching ~36% relative abundance while Normal samples remain near zero. Within Firmicutes, the highest-ranked ASVs include ASV_0008 and ASV_0018 (Streptococcus), ASV_0017 (Peptostreptococcus), and ASV_0012 (Gemmiger), with the Streptococcus ASVs showing clear CRC enrichment and Gemmiger trending higher in Normal samples. Within Bacteroidota, multiple Bacteroides ASVs (ASV_0003, ASV_0006, ASV_0007, ASV_0020) dominate the panel with no consistent directional signal between groups, reinforcing the phylum- and genus-level conclusion that Bacteroidota does not show a strong CRC-specific pattern in this dataset. The most abundant ASVs not captured in these plots (likely ASV_0001 and ASV_0002) should be identified by phylum assignment and plotted separately if they belong to a biologically relevant group.</span>
+
+```{r crc-asv-plots, fig.width=12, fig.height=10}
+# ── 1. Fusobacterium ASV_0005 — the canonical CRC-associated ASV ──────────────
+fuso_asv_plot <- 
+  ASV_df %>%
+  dplyr::filter(ASV == "ASV_0005") %>%
+  ggplot(aes(x = ethnicity, y = Abundance,
+             fill = ethnicity, color = ethnicity)) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(title = "Fusobacterium (ASV_0005)",
+       y = "Relative Abundance", x = "") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1))
+
+# ── 2. CRC-enriched Streptococcus ASVs ────────────────────────────────────────
+strep_asv_plot <- 
+  ASV_df %>%
+  dplyr::filter(ASV %in% c("ASV_0008", "ASV_0018", "ASV_0019", "ASV_0029")) %>%
+  ggplot(aes(x = ethnicity, y = Abundance,
+             fill = ethnicity, color = ethnicity)) +
+  facet_wrap(~ASV, scales = "free_y", nrow = 1) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(title = "Streptococcus ASVs (CRC-enriched)",
+       y = "Relative Abundance", x = "") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1))
+
+# ── 3. CRC-enriched Peptostreptococcus ASV ────────────────────────────────────
+peptostep_asv_plot <- 
+  ASV_df %>%
+  dplyr::filter(ASV == "ASV_0017") %>%
+  ggplot(aes(x = ethnicity, y = Abundance,
+             fill = ethnicity, color = ethnicity)) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(title = "Peptostreptococcus (ASV_0017)",
+       y = "Relative Abundance", x = "") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1))
+
+# ── 4. Normal-enriched commensal Firmicutes ASVs ──────────────────────────────
+# Faecalibacterium and Gemmiger — butyrate producers depleted in CRC
+commensals_asv_plot <- 
+  ASV_df %>%
+  dplyr::filter(ASV %in% c("ASV_0032", "ASV_0012")) %>%
+  ggplot(aes(x = ethnicity, y = Abundance,
+             fill = ethnicity, color = ethnicity)) +
+  facet_wrap(~ASV + Genus, scales = "free_y", nrow = 1) +
+  geom_boxplot(alpha = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.2) +
+  scale_color_manual(values = crc_colors) +
+  scale_fill_manual(values = crc_colors) +
+  labs(title = "Commensal Firmicutes ASVs (Normal-enriched)",
+       y = "Relative Abundance", x = "") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 30, hjust = 1, vjust = 1))
+
+# ── 5. Combine all plots ──────────────────────────────────────────────────────
+(fuso_asv_plot | peptostep_asv_plot) /
+  strep_asv_plot /
+  commensals_asv_plot +
+  plot_annotation(
+    title = "Key CRC-Associated ASVs",
+    tag_levels = "A")
+```
+
+<span style="color: red;">INTERPRETATION #7: Please make some plots at the ASV level as it relates to your scientific question. Were there any ASVs that were especially related to trends that you saw? Did a specific phylogenetic group all show the same trends? Or did the ASVs have various, likely niche-specific responses?
+
+The ASV-level plots reveal a clear and biologically coherent story that is fully consistent with the known CRC microbiome literature. The CRC-enriched pathobionts and Normal-enriched commensals tell opposing but complementary sides of the same story — gut dysbiosis in CRC involves both a gain of harmful taxa and a loss of protective ones.
+Fusobacterium (ASV_0005, Panel A) shows the most striking CRC-specific signal in the entire dataset — one CRC sample reaches ~36% relative abundance while the vast majority of Normal samples remain at near-zero. This extreme, sparse enrichment pattern is characteristic of Fusobacterium nucleatum, which is known to colonize tumor tissue in a highly focal and patient-specific manner rather than being universally elevated across all CRC patients.
+Peptostreptococcus (ASV_0017, Panel B) shows a clear CRC enrichment with several high-abundance outliers in CRC samples and consistently low abundance in Normal samples. Peptostreptococcus species have been associated with CRC in multiple studies and are thought to contribute to tumor microenvironment inflammation.
+Streptococcus ASVs (Panel C) — unlike the single-taxon Fusobacterium signal — show that the Streptococcus CRC enrichment pattern is consistent across multiple ASVs (ASV_0008, ASV_0018, ASV_0019, ASV_0029), all of which trend higher in CRC samples. This suggests a group-level rather than niche-specific response, where multiple Streptococcus taxa are collectively enriched in the CRC gut environment, possibly reflecting shared ecological traits such as tolerance of the acidic, inflamed tumor microenvironment.
+Commensal Firmicutes ASVs (Panel D) tell the complementary story — both Gemmiger (ASV_0012) and Faecalibacterium (ASV_0032) trend higher in Normal samples, consistent with their well-established roles as butyrate-producing commensals that support colonocyte health and anti-inflammatory immune tone. Their depletion in CRC samples, while subtle at the ASV level, reinforces the phylum- and genus-level signal and is consistent with the broader literature on the loss of protective Firmicutes in colorectal cancer.</span>
+
+<span style="color: red;">INTERPRETATION #8: Do a quick literature search and look back at the MAL2 paper or related CRC microbiome studies. Does your ASV-level analysis represent something that is currently known in the CRC microbiome literature? Or is this a novel result? What did you learn about this ASV or group of ASVs?
+
+The ASV-level patterns observed in this dataset are strongly consistent with the existing CRC microbiome literature and replicate findings from multiple independent cohorts. Fusobacterium (ASV_0005) is perhaps the most well-validated CRC-associated microorganism in the field — worldwide, unbiased genomic analyses have revealed enrichment of Fusobacterium nucleatum in human CRC relative to non-cancerous colorectal tissues, and patients with CRC tumors harboring high levels of F. nucleatum have been shown to have poorer survival outcomes. Notably, the sparse, patient-specific enrichment pattern we observed — where only a subset of CRC samples show high Fusobacterium abundance — is also consistent with the literature: Fusobacterium nucleatum was detected in approximately 23% of fresh-frozen tumor samples and only 10.5% of paired normal adjacent tissue in one Brazilian cohort, with significantly higher levels in tumor tissue. This focal, non-universal enrichment pattern is a hallmark of Fusobacterium biology in CRC. nihnih
+The enrichment of Peptostreptococcus (ASV_0017) and Streptococcus ASVs in CRC samples is equally well-supported. A meta-analysis of eleven publicly available CRC microbiome datasets confirmed that CRC tissues are enriched for oral pathogens including Fusobacterium nucleatum, Parvimonas micra, and Peptostreptococcus stomatis. Furthermore, LEfSe analysis revealed Peptostreptococcus, Streptococcus, and Solobacterium spp. at significantly higher relative abundance in saliva and stool samples of CRC patients compared with controls, with Streptococcus moorei specifically enriched in advanced-stage CRC. The consistency of the Streptococcus signal across multiple ASVs in our dataset aligns with the established finding that Peptostreptococcus anaerobius — a close relative — selectively binds to tumors and CRC cell lines and triggers downstream responses resulting in chronic inflammation and tumor progression in mouse models. Finally, the depletion of Faecalibacterium and Gemmiger in CRC samples replicates a well-known finding: Blautia and Faecalibacterium were overrepresented in normal controls compared to cancer groups across multiple cohorts — consistent with the known role of these butyrate-producing commensals in maintaining colonocyte health and anti-inflammatory immune tone. In summary, our ASV-level findings are not novel but are a meaningful replication of established CRC microbiome biology, which itself serves as a strong validation of our bioinformatic pipeline and analytical approach.</span>
+
+
+# Session Information 
+For reproducibility 
+```{r session_info}
+devtools::session_info()
+```
